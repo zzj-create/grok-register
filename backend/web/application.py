@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from .account_exports import build_account_auth_archive
 from .jobs import job_coordinator
 from .relogin_jobs import relogin_coordinator
+from .reregister_jobs import reregister_coordinator
 from backend.shared.paths import DATA_ROOT, PROJECT_ROOT, STATIC_ROOT
 from backend.integrations.proxy import parse_proxy_url
 
@@ -786,6 +787,8 @@ def create_app() -> FastAPI:
     def api_accounts_relogin(body: AccountIdsBody) -> Dict[str, Any]:
         if job_coordinator.status().get("running"):
             raise HTTPException(status_code=409, detail="注册任务运行中，请等待任务结束后重新登录")
+        if reregister_coordinator.status().get("running"):
+            raise HTTPException(status_code=409, detail="重新注册任务运行中，请等待任务结束后重新登录")
         try:
             status = relogin_coordinator.start_many(_batch_account_ids(body.ids))
         except LookupError as exc:
@@ -795,6 +798,30 @@ def create_app() -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, "relogin": status}
+
+    @app.get("/api/accounts/reregister/status")
+    def api_account_reregister_status() -> Dict[str, Any]:
+        return {"ok": True, "reregister": reregister_coordinator.status()}
+
+    @app.post("/api/accounts/reregister")
+    def api_accounts_reregister(body: AccountIdsBody) -> Dict[str, Any]:
+        if job_coordinator.status().get("running"):
+            raise HTTPException(status_code=409, detail="注册任务运行中，请等待任务结束后再重新注册")
+        if relogin_coordinator.status().get("running"):
+            raise HTTPException(status_code=409, detail="重新登录任务运行中，请等待任务结束后再重新注册")
+        try:
+            status = reregister_coordinator.start_many(_batch_account_ids(body.ids))
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "reregister": status}
+
+    @app.post("/api/accounts/reregister/stop")
+    def api_accounts_reregister_stop() -> Dict[str, Any]:
+        return {"ok": True, "reregister": reregister_coordinator.request_stop()}
 
     @app.post("/api/accounts/auth-json/{kind}/download")
     def api_accounts_auth_json_download(kind: str, body: AccountIdsBody) -> StreamingResponse:
@@ -840,6 +867,8 @@ def create_app() -> FastAPI:
     def api_account_relogin(account_id: int) -> Dict[str, Any]:
         if job_coordinator.status().get("running"):
             raise HTTPException(status_code=409, detail="注册任务运行中，请等待任务结束后重新登录")
+        if reregister_coordinator.status().get("running"):
+            raise HTTPException(status_code=409, detail="重新注册任务运行中，请等待任务结束后重新登录")
         try:
             status = relogin_coordinator.start(account_id)
         except LookupError as exc:
@@ -849,6 +878,23 @@ def create_app() -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, "relogin": status}
+
+    @app.post("/api/accounts/{account_id}/reregister")
+    def api_account_reregister(account_id: int) -> Dict[str, Any]:
+        """对注册失败的账号重跑完整注册流程。"""
+        if job_coordinator.status().get("running"):
+            raise HTTPException(status_code=409, detail="注册任务运行中，请等待任务结束后再重新注册")
+        if relogin_coordinator.status().get("running"):
+            raise HTTPException(status_code=409, detail="重新登录任务运行中，请等待任务结束后再重新注册")
+        try:
+            status = reregister_coordinator.start(account_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "reregister": status}
 
     @app.post("/api/accounts/{account_id}/grok2api/import")
     def api_account_grok2api_import(account_id: int) -> Dict[str, Any]:
@@ -1211,6 +1257,8 @@ def create_app() -> FastAPI:
     def api_job_start(body: StartJobBody) -> Dict[str, Any]:
         if relogin_coordinator.status().get("running"):
             raise HTTPException(status_code=409, detail="账号重新登录中，请等待完成后再启动注册")
+        if reregister_coordinator.status().get("running"):
+            raise HTTPException(status_code=409, detail="重新注册任务运行中，请等待完成后再启动注册")
         gr = _gr()
         gr.load_config()
         if body.config:

@@ -192,7 +192,7 @@ class RegistrationRepository:
             )
             conn.execute("PRAGMA user_version = 4")
 
-    def add_result(self, record: Dict[str, Any]) -> int:
+    def _normalize_result_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
         now = self.now_text()
         status = str(record.get("status") or "failure").strip().lower()
         success = 1 if status == "success" or bool(record.get("success")) else 0
@@ -202,7 +202,7 @@ class RegistrationRepository:
         else:
             extra_json = json.dumps(extra or {}, ensure_ascii=False, sort_keys=True)
 
-        normalized = {
+        return {
             "source_key": record.get("source_key") or None,
             "batch_id": str(record.get("batch_id") or ""),
             "source": str(record.get("source") or "web"),
@@ -252,6 +252,9 @@ class RegistrationRepository:
             "nsfw_status": str(record.get("nsfw_status") or ""),
             "extra_json": extra_json,
         }
+
+    def add_result(self, record: Dict[str, Any]) -> int:
+        normalized = self._normalize_result_record(record)
         columns = ", ".join(RESULT_COLUMNS)
         placeholders = ", ".join(f":{name}" for name in RESULT_COLUMNS)
         with self._connect() as conn:
@@ -260,6 +263,28 @@ class RegistrationRepository:
                 normalized,
             )
             return int(cursor.lastrowid)
+
+    def update_reregister_result(self, account_id: int, record: Dict[str, Any]) -> bool:
+        """重新注册完成后全量覆盖原失败记录（保留 id 与 source_key）。"""
+        try:
+            normalized_id = int(account_id)
+        except (TypeError, ValueError):
+            return False
+        if normalized_id <= 0:
+            return False
+        normalized = self._normalize_result_record(record)
+        normalized["id"] = normalized_id
+        # source_key 具有 UNIQUE 约束，保持原值不变，避免覆盖或冲突
+        normalized.pop("source_key", None)
+        assignments = ", ".join(
+            f"{name} = :{name}" for name in RESULT_COLUMNS if name != "source_key"
+        )
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"UPDATE registration_results SET {assignments} WHERE id = :id",
+                normalized,
+            )
+            return bool(cursor.rowcount)
 
     def has_success(self, email: str) -> bool:
         normalized = str(email or "").strip()

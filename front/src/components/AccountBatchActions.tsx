@@ -1,4 +1,4 @@
-import { Archive, ChevronDown, ListChecks, Loader2, LogIn, Trash2, UploadCloud } from "lucide-react";
+import { Archive, ChevronDown, ListChecks, Loader2, LogIn, RotateCcw, Trash2, UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui";
 
 export function AccountBatchActions({
@@ -6,22 +6,26 @@ export function AccountBatchActions({
   busy,
   menuOpen,
   reloginRunning,
+  reregisterRunning,
   onToggleMenu,
   onCloseMenu,
   onExport,
   onImportSub2API,
   onRelogin,
+  onReregister,
   onDelete,
 }: {
   selectedCount: number;
   busy: boolean;
   menuOpen: boolean;
   reloginRunning: boolean;
+  reregisterRunning: boolean;
   onToggleMenu: () => void;
   onCloseMenu: () => void;
   onExport: (kind: "cpa" | "grok2api") => void;
   onImportSub2API: () => void;
   onRelogin: () => void;
+  onReregister: () => void;
   onDelete: () => void;
 }) {
   return (
@@ -85,7 +89,17 @@ export function AccountBatchActions({
               type="button"
               role="menuitem"
               className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-45"
-              disabled={reloginRunning}
+              disabled={reregisterRunning || reloginRunning}
+              onClick={onReregister}
+            >
+              <RotateCcw className="h-4 w-4" aria-hidden="true" />
+              重新注册失败账号
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-45"
+              disabled={reloginRunning || reregisterRunning}
               onClick={onRelogin}
             >
               <LogIn className="h-4 w-4" aria-hidden="true" />

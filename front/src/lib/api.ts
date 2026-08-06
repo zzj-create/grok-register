@@ -109,6 +109,8 @@ export type ReloginStatus = {
   failed_count: number;
 };
 
+export type ReregisterStatus = ReloginStatus;
+
 export type AuthArchiveDownload = {
   blob: Blob;
   filename: string;
@@ -266,6 +268,21 @@ export const api = {
     }),
   reloginStatus: () =>
     request<{ ok: boolean; relogin: ReloginStatus }>("/api/accounts/relogin/status"),
+  startReregister: (id: number) =>
+    request<{ ok: boolean; reregister: ReregisterStatus }>(`/api/accounts/${id}/reregister`, {
+      method: "POST",
+    }),
+  startBatchReregister: (ids: number[]) =>
+    request<{ ok: boolean; reregister: ReregisterStatus }>("/api/accounts/reregister", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+  reregisterStatus: () =>
+    request<{ ok: boolean; reregister: ReregisterStatus }>("/api/accounts/reregister/status"),
+  stopReregister: () =>
+    request<{ ok: boolean; reregister: ReregisterStatus }>("/api/accounts/reregister/stop", {
+      method: "POST",
+    }),
   importAccountToGrok2API: (id: number) =>
     request<{
       ok: boolean;

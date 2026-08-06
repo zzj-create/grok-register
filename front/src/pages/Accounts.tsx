@@ -17,12 +17,13 @@ import {
   MoreHorizontal,
   Power,
   RefreshCw,
+  RotateCcw,
   Search,
   Trash2,
   X,
 } from "lucide-react";
 import { AccountBatchActions } from "@/components/AccountBatchActions";
-import { api, type AccountRecord, type ReloginStatus } from "@/lib/api";
+import { api, type AccountRecord, type ReloginStatus, type ReregisterStatus } from "@/lib/api";
 import { copyText, formatDuration, maskSecret } from "@/lib/utils";
 import {
   Badge,
@@ -463,9 +464,11 @@ export function AccountsPage() {
   const [hasMore, setHasMore] = useState(false);
   const [relogin, setRelogin] = useState<ReloginStatus | null>(null);
   const [reloginPolling, setReloginPolling] = useState(true);
+  const [reregister, setReregister] = useState<ReregisterStatus | null>(null);
+  const [reregisterPolling, setReregisterPolling] = useState(true);
   const [reloginFailure, setReloginFailure] = useState<{ email: string; error: string } | null>(null);
   const [batchMenuOpen, setBatchMenuOpen] = useState(false);
-  const [batchBusy, setBatchBusy] = useState<"" | "export-cpa" | "export-grok2api" | "relogin" | "import-sub2api">("");
+  const [batchBusy, setBatchBusy] = useState<"" | "export-cpa" | "export-grok2api" | "relogin" | "reregister" | "import-sub2api">("");
   const [deleteDialog, setDeleteDialog] = useState<{ ids: number[]; email: string } | null>(null);
   const [deleteBusy, setDeleteBusy] = useState<"" | "files" | "database">("");
   const [grok2apiImportingId, setGrok2apiImportingId] = useState<number | null>(null);
@@ -581,6 +584,47 @@ export function AccountsPage() {
       if (timer) window.clearTimeout(timer);
     };
   }, [reloginPolling]);
+
+  useEffect(() => {
+    if (!reregisterPolling) return;
+    let active = true;
+    let timer: number | undefined;
+    let lastRunning = !!reregister?.running;
+    const check = async () => {
+      try {
+        const result = await api.reregisterStatus();
+        if (!active) return;
+        const next = result.reregister;
+        setReregister(next);
+        if (!next.running) {
+          if (lastRunning) await load();
+          if (next.error) {
+            showToast(
+              next.total_count > 1 ? next.error : `重新注册失败: ${next.error}`,
+              "error"
+            );
+          } else if (lastRunning) {
+            showToast(
+              next.total_count > 1 ? "批量重新注册完成" : "重新注册完成，记录已更新",
+              "success"
+            );
+          }
+          setReregisterPolling(false);
+          return;
+        }
+        lastRunning = next.running;
+        if (next.running) timer = window.setTimeout(check, 2000);
+        else setReregisterPolling(false);
+      } catch {
+        if (active) timer = window.setTimeout(check, 5000);
+      }
+    };
+    void check();
+    return () => {
+      active = false;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [reregisterPolling]);
 
   useEffect(() => {
     if (!detail) return;
@@ -703,6 +747,31 @@ export function AccountsPage() {
     }
   };
 
+  const onBatchReregister = async () => {
+    const failedIds = selectedIds.filter((id) => {
+      const record = items.find((item) => item.id === id);
+      return record && !record.success;
+    });
+    if (!failedIds.length) {
+      showToast("选中记录里没有注册失败的账号", "error");
+      return;
+    }
+    const skipped = selectedIds.length - failedIds.length;
+    if (!window.confirm(`按顺序对 ${failedIds.length} 个失败账号重跑完整注册流程${skipped ? `（跳过 ${skipped} 个已成功账号）` : ""}？`)) return;
+    setBatchMenuOpen(false);
+    setBatchBusy("reregister");
+    try {
+      const result = await api.startBatchReregister(failedIds);
+      setReregister(result.reregister);
+      setReregisterPolling(!!result.reregister.running);
+      showToast("已启动批量重新注册", "success");
+    } catch (err: any) {
+      showToast(err.message || "启动批量重新注册失败", "error");
+    } finally {
+      setBatchBusy("");
+    }
+  };
+
   const openDeleteDialog = (ids = selectedIds) => {
     if (!ids.length) {
       showToast("请先选择记录", "error");
@@ -786,6 +855,22 @@ export function AccountsPage() {
     }
   };
 
+  const onReregister = async (item: AccountRecord) => {
+    if (item.success) {
+      showToast("该账号已注册成功，无需重新注册", "error");
+      return;
+    }
+    if (!window.confirm(`对 ${item.email || `账号 #${item.id}`} 重跑完整注册流程？Outlook/MailNest 邮箱将复用原邮箱，其他提供商会更换新邮箱。`)) return;
+    try {
+      const result = await api.startReregister(item.id);
+      setReregister(result.reregister);
+      setReregisterPolling(!!result.reregister.running);
+      showToast("已启动重新注册，请稍候", "success");
+    } catch (err: any) {
+      showToast(err.message || "启动重新注册失败", "error");
+    }
+  };
+
   const onImportSub2API = async (item: AccountRecord) => {
     setSub2apiImportingId(item.id);
     try {
@@ -840,7 +925,8 @@ export function AccountsPage() {
     const menuWidth = 224;
     const menuHeight = 172
       + (item.grok2api_remote_configured ? 48 : 0)
-      + (item.sub2api_remote_configured ? 48 : 0);
+      + (item.sub2api_remote_configured ? 48 : 0)
+      + (!item.success ? 48 : 0);
     const left = Math.min(Math.max(rect.right - menuWidth, 8), window.innerWidth - menuWidth - 8);
     const top = rect.bottom + menuHeight > window.innerHeight
       ? Math.max(8, rect.top - menuHeight - 6)
@@ -864,6 +950,7 @@ export function AccountsPage() {
 
   const MoreMenuContent = ({ item }: { item: AccountRecord }) => {
     const currentRelogin = !!relogin?.running && relogin.account_id === item.id;
+    const currentReregister = !!reregister?.running && reregister.account_id === item.id;
     const importing = grok2apiImportingId === item.id;
     const sub2apiImporting = sub2apiImportingId === item.id;
     const exportEntry = (kind: "cpa" | "grok2api") => {
@@ -941,11 +1028,30 @@ export function AccountsPage() {
           </button>
         ) : null}
         <div className="my-1 border-t" />
+        {!item.success ? (
+          <button
+            type="button"
+            role="menuitem"
+            className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-45"
+            disabled={!!reregister?.running || !!relogin?.running}
+            onClick={() => {
+              setMoreMenu(null);
+              void onReregister(item);
+            }}
+          >
+            {currentReregister ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <RotateCcw className="h-4 w-4" aria-hidden="true" />
+            )}
+            {currentReregister ? reregister?.stage || "重新注册中" : "重新注册"}
+          </button>
+        ) : null}
         <button
           type="button"
           role="menuitem"
           className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-45"
-          disabled={!!relogin?.running || !item.email || !item.password}
+          disabled={!!relogin?.running || !!reregister?.running || !item.email || !item.password}
           onClick={() => {
             setMoreMenu(null);
             void onRelogin(item);
@@ -978,11 +1084,13 @@ export function AccountsPage() {
               busy={!!batchBusy}
               menuOpen={batchMenuOpen}
               reloginRunning={!!relogin?.running}
+              reregisterRunning={!!reregister?.running}
               onToggleMenu={() => setBatchMenuOpen((open) => !open)}
               onCloseMenu={() => setBatchMenuOpen(false)}
               onExport={(kind) => void onBatchExport(kind)}
               onImportSub2API={() => void onBatchImportSub2API()}
               onRelogin={() => void onBatchRelogin()}
+              onReregister={() => void onBatchReregister()}
               onDelete={() => {
                 setBatchMenuOpen(false);
                 openDeleteDialog(selectedIds);

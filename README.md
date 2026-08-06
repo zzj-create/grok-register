@@ -22,6 +22,7 @@
 - Camoufox 浏览器，支持多 worker 和异常进程清理
 - 支持 Cloudflare、DuckMail / Mail.tm、YYDS、MailNest、OutlookEmail、CloudMail
 - 注册完成后生成 CPA / Grok2API JSON，并可直接导入远程 Sub2API
+- 注册失败的账号可在账号页一键重新注册（Outlook/MailNest 复用原邮箱，其他提供商自动换邮箱）
 - JSON 查看、复制和下载
 - 首次访问创建唯一管理员账号
 - Docker Compose 部署，支持无桌面 Linux 服务器
