@@ -1,6 +1,6 @@
 # Grok Register
 
-基于 FastAPI、React 和 Camoufox 的 Web 注册管理工具。支持注册任务、账号管理，以及 CPA / Grok2API 授权文件生成。
+ 基于 FastAPI、React 和 Camoufox 的 Web 注册管理工具。支持注册任务、账号管理，以及 CPA / Grok2API 授权文件生成与 Sub2API 远程导入。
 
 [部署文档](DEPLOYMENT.md) · [Web 说明](WEB.md)
 
@@ -21,7 +21,7 @@
 - Web 控制台：任务进度、实时日志、账号管理和系统设置
 - Camoufox 浏览器，支持多 worker 和异常进程清理
 - 支持 Cloudflare、DuckMail / Mail.tm、YYDS、MailNest、OutlookEmail、CloudMail
-- 注册完成后生成 CPA / Grok2API JSON
+- 注册完成后生成 CPA / Grok2API JSON，并可直接导入远程 Sub2API
 - JSON 查看、复制和下载
 - 首次访问创建唯一管理员账号
 - Docker Compose 部署，支持无桌面 Linux 服务器
@@ -173,6 +173,15 @@ Windows 启动：
 | `grok2api_remote_username` | 远程 Grok2API 管理员账号 |
 | `grok2api_remote_password` | 远程 Grok2API 管理员密码 |
 | `grok2api_auto_import` | JSON 生成后自动登录并导入远程 Grok2API |
+| `sub2api_remote_url` | 远程 Sub2API 站点根地址（不附加 `/api/v1`） |
+| `sub2api_remote_email` | 远程 Sub2API 管理员邮箱 |
+| `sub2api_remote_password` | 远程 Sub2API 管理员密码 |
+| `sub2api_group_id` | 目标分组 ID，填 0 按名称匹配或自动创建 |
+| `sub2api_group_name` | 目标分组名称，默认 `grok-register` |
+| `sub2api_auto_create_group` | 分组不存在时自动创建 |
+| `sub2api_auto_import` | SSO 换 token 成功后自动导入远程 Sub2API（同名账号刷新凭据） |
+| `sub2api_account_concurrency` | 写入 Sub2API 账号的并发数（1-100，默认 3） |
+| `sub2api_account_priority` | 写入 Sub2API 账号的优先级（0-100，默认 50） |
 
 配置模板见 [`config.example.json`](config.example.json)。
 

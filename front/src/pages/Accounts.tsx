@@ -123,9 +123,10 @@ function MobileStatusGrid({ item }: { item: AccountRecord }) {
     ["Auth", item.cpa_status, authStatusLabel(item.cpa_status)],
     ["CPA", item.cpa_remote_status, importStatusLabel(item.cpa_remote_status)],
     ["G2A", item.grok2api_remote_status, importStatusLabel(item.grok2api_remote_status)],
+    ["S2A", item.sub2api_remote_status, importStatusLabel(item.sub2api_remote_status)],
   ];
   return (
-    <div className="grid grid-cols-4 overflow-hidden rounded-lg border bg-card">
+    <div className="grid grid-cols-5 overflow-hidden rounded-lg border bg-card">
       {entries.map(([title, status, label], index) => (
         <div key={title} className={`min-w-0 px-1.5 py-1.5 text-center ${index ? "border-l" : ""}`}>
           <div className="text-[10px] leading-4 text-muted-foreground">{title}</div>
@@ -240,6 +241,9 @@ function AccountDetails({
     ["Grok2API 远程入库", remoteImportLabel(detail.grok2api_remote_status)],
     ["Grok2API 远程入库时间", detail.grok2api_remote_imported_at],
     ["Grok2API 远程错误", detail.grok2api_remote_error],
+    ["Sub2API 远程入库", remoteImportLabel(detail.sub2api_remote_status)],
+    ["Sub2API 远程入库时间", detail.sub2api_remote_imported_at],
+    ["Sub2API 远程错误", detail.sub2api_remote_error],
     ["Auth 信息", detail.auth_info],
     ["邮箱池账号 ID", detail.email_account_id],
     ["邮箱停用状态", emailDisableLabel(detail.email_disable_status)],
@@ -262,6 +266,9 @@ function AccountDetails({
           </Badge>
           <Badge variant={cpaVariant(detail.grok2api_remote_status)}>
             Grok2API {remoteImportLabel(detail.grok2api_remote_status)}
+          </Badge>
+          <Badge variant={cpaVariant(detail.sub2api_remote_status)}>
+            Sub2API {remoteImportLabel(detail.sub2api_remote_status)}
           </Badge>
           <Badge variant={emailDisableVariant(detail.email_disable_status)}>
             邮箱 {emailDisableLabel(detail.email_disable_status)}
@@ -458,10 +465,11 @@ export function AccountsPage() {
   const [reloginPolling, setReloginPolling] = useState(true);
   const [reloginFailure, setReloginFailure] = useState<{ email: string; error: string } | null>(null);
   const [batchMenuOpen, setBatchMenuOpen] = useState(false);
-  const [batchBusy, setBatchBusy] = useState<"" | "export-cpa" | "export-grok2api" | "relogin">("");
+  const [batchBusy, setBatchBusy] = useState<"" | "export-cpa" | "export-grok2api" | "relogin" | "import-sub2api">("");
   const [deleteDialog, setDeleteDialog] = useState<{ ids: number[]; email: string } | null>(null);
   const [deleteBusy, setDeleteBusy] = useState<"" | "files" | "database">("");
   const [grok2apiImportingId, setGrok2apiImportingId] = useState<number | null>(null);
+  const [sub2apiImportingId, setSub2apiImportingId] = useState<number | null>(null);
   const [moreMenu, setMoreMenu] = useState<{
     item: AccountRecord;
     top: number;
@@ -778,10 +786,61 @@ export function AccountsPage() {
     }
   };
 
+  const onImportSub2API = async (item: AccountRecord) => {
+    setSub2apiImportingId(item.id);
+    try {
+      const response = await api.importAccountToSub2API(item.id);
+      setItems((previous) => previous.map((value) => value.id === item.id ? response.item : value));
+      if (detail?.id === item.id) setDetail(response.item);
+      const result = response.result || {};
+      const failed = result.failed || 0;
+      showToast(
+        failed
+          ? `Sub2API 导入失败 ${failed} 个`
+          : `Sub2API 导入完成：新增 ${result.created || 0}，更新 ${result.updated || 0}`,
+        failed ? "error" : "success"
+      );
+    } catch (err: any) {
+      showToast(err.message || "Sub2API 导入失败", "error");
+      await load();
+    } finally {
+      setSub2apiImportingId(null);
+    }
+  };
+
+  const onBatchImportSub2API = async () => {
+    if (!selectedIds.length) return;
+    if (!window.confirm(`把选中的 ${selectedIds.length} 个账号导入到 Sub2API？同名账号将刷新凭据。`)) return;
+    setBatchMenuOpen(false);
+    setBatchBusy("import-sub2api");
+    try {
+      const result = await api.importAccountsToSub2API(selectedIds);
+      const failedList = (result.results || []).filter((entry) => !entry.ok);
+      const failedPreview = failedList
+        .slice(0, 3)
+        .map((entry) => entry.email || `#${entry.id}`)
+        .join("、");
+      showToast(
+        result.failed
+          ? `Sub2API 批量导入完成：成功 ${result.success}，失败 ${result.failed}${failedPreview ? `（${failedPreview}）` : ""}`
+          : `Sub2API 批量导入完成：${result.success} 个全部成功`,
+        result.failed ? "error" : "success"
+      );
+      await load(page, pageSize);
+    } catch (err: any) {
+      showToast(err.message || "Sub2API 批量导入失败", "error");
+      await load();
+    } finally {
+      setBatchBusy("");
+    }
+  };
+
   const openMoreMenu = (item: AccountRecord, button: HTMLButtonElement) => {
     const rect = button.getBoundingClientRect();
     const menuWidth = 224;
-    const menuHeight = item.grok2api_remote_configured ? 220 : 172;
+    const menuHeight = 172
+      + (item.grok2api_remote_configured ? 48 : 0)
+      + (item.sub2api_remote_configured ? 48 : 0);
     const left = Math.min(Math.max(rect.right - menuWidth, 8), window.innerWidth - menuWidth - 8);
     const top = rect.bottom + menuHeight > window.innerHeight
       ? Math.max(8, rect.top - menuHeight - 6)
@@ -806,6 +865,7 @@ export function AccountsPage() {
   const MoreMenuContent = ({ item }: { item: AccountRecord }) => {
     const currentRelogin = !!relogin?.running && relogin.account_id === item.id;
     const importing = grok2apiImportingId === item.id;
+    const sub2apiImporting = sub2apiImportingId === item.id;
     const exportEntry = (kind: "cpa" | "grok2api") => {
       const available = kind === "cpa" ? item.cpa_auth_available : item.grok2api_auth_available;
       const label = kind === "cpa" ? "下载 CPA JSON" : "下载 Grok2API JSON";
@@ -860,6 +920,26 @@ export function AccountsPage() {
             {importing ? "正在导入 Grok2API" : "导入到 Grok2API"}
           </button>
         ) : null}
+        {item.sub2api_remote_configured ? (
+          <button
+            type="button"
+            role="menuitem"
+            className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-45"
+            disabled={sub2apiImporting || !item.grok2api_auth_available}
+            title={!item.grok2api_auth_available ? "Grok2API JSON 文件不存在" : undefined}
+            onClick={() => {
+              setMoreMenu(null);
+              void onImportSub2API(item);
+            }}
+          >
+            {sub2apiImporting ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <UploadCloud className="h-4 w-4" aria-hidden="true" />
+            )}
+            {sub2apiImporting ? "正在导入 Sub2API" : "导入到 Sub2API"}
+          </button>
+        ) : null}
         <div className="my-1 border-t" />
         <button
           type="button"
@@ -901,6 +981,7 @@ export function AccountsPage() {
               onToggleMenu={() => setBatchMenuOpen((open) => !open)}
               onCloseMenu={() => setBatchMenuOpen(false)}
               onExport={(kind) => void onBatchExport(kind)}
+              onImportSub2API={() => void onBatchImportSub2API()}
               onRelogin={() => void onBatchRelogin()}
               onDelete={() => {
                 setBatchMenuOpen(false);

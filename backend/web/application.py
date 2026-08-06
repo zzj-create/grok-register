@@ -86,6 +86,16 @@ CONFIG_PUBLIC_KEYS = (
     "grok2api_remote_username",
     "grok2api_remote_password",
     "grok2api_auto_import",
+    "sub2api_remote_url",
+    "sub2api_remote_email",
+    "sub2api_remote_password",
+    "sub2api_group_id",
+    "sub2api_group_name",
+    "sub2api_auto_create_group",
+    "sub2api_auto_import",
+    "sub2api_account_concurrency",
+    "sub2api_account_priority",
+    "sub2api_account_rate_multiplier",
     "mailnest_api_key",
     "mailnest_project_code",
     "yyds_api_key",
@@ -104,6 +114,7 @@ SENSITIVE_HINT_KEYS = {
     "outlookemail_session_cookie",
     "cpa_management_key",
     "grok2api_remote_password",
+    "sub2api_remote_password",
     "mailnest_api_key",
     "yyds_api_key",
     "yyds_jwt",
@@ -313,6 +324,8 @@ def _apply_config_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
             "close_browser_on_stop",
             "cpa_auto_add",
             "grok2api_auto_import",
+            "sub2api_auto_import",
+            "sub2api_auto_create_group",
             "outlookemail_disable_after_cpa_success",
         ):
             value = bool(value)
@@ -327,6 +340,26 @@ def _apply_config_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
                 value = max(1, min(value, 8))
             elif key == "outlookemail_top":
                 value = max(1, min(value, 50))
+        elif key in (
+            "sub2api_group_id",
+            "sub2api_account_concurrency",
+            "sub2api_account_priority",
+        ):
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                continue
+            if key == "sub2api_group_id":
+                value = max(0, value)
+            elif key == "sub2api_account_concurrency":
+                value = max(1, min(value, 100))
+            elif key == "sub2api_account_priority":
+                value = max(0, min(value, 100))
+        elif key == "sub2api_account_rate_multiplier":
+            try:
+                value = max(0.1, min(float(value), 10.0))
+            except (TypeError, ValueError):
+                continue
         elif key == "log_level":
             value = str(value or "info").strip().lower() or "info"
         elif key == "browser_locale":
@@ -358,6 +391,7 @@ def _apply_config_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
             "proxy",
             "cpa_remote_url",
             "grok2api_remote_url",
+            "sub2api_remote_url",
             "outlookemail_api_base",
             "duckmail_api_base",
             "cloudflare_api_base",
@@ -393,6 +427,9 @@ def _serialize_record(record: Dict[str, Any]) -> Dict[str, Any]:
     from backend.integrations.grok2api_client import Grok2APIClient
 
     item["grok2api_remote_configured"] = Grok2APIClient.is_configured(raw_config)
+    from backend.integrations.sub2api_client import Sub2APIClient
+
+    item["sub2api_remote_configured"] = Sub2APIClient.is_configured(raw_config)
     for kind in ("cpa", "grok2api"):
         try:
             _find_account_auth_file(item, raw_config, kind)
@@ -863,6 +900,165 @@ def create_app() -> FastAPI:
         )
         refreshed = store.get_results_by_ids([account_id])[0]
         return {"ok": True, "result": result, "item": _serialize_record(refreshed)}
+
+    def _sub2api_import_record(
+        record: Dict[str, Any],
+        raw_config: Dict[str, Any],
+        client: Any,
+    ) -> Dict[str, Any]:
+        """把单条注册记录的 grok_build JSON 导入 Sub2API，并回写入库状态。"""
+        account_id = int(record.get("id") or 0)
+        store = _gr().get_registration_repository()
+        path = _find_account_auth_file(record, raw_config, "grok2api")
+        outcome = client.import_auth_file(path)
+        failed = int(outcome.get("failed", 0) or 0)
+        errors = [
+            str(item.get("error") or "").strip()
+            for item in outcome.get("results") or []
+            if isinstance(item, dict) and not item.get("ok") and item.get("error")
+        ]
+        import_status = "failed" if failed else "success"
+        if failed and int(outcome.get("total", 0) or 0) > failed:
+            import_status = "partial"
+        import_error = "; ".join(errors)[:500] if failed else ""
+        store.update_remote_import_status(
+            account_id,
+            "sub2api",
+            status=import_status,
+            error=import_error,
+        )
+        return {
+            "id": account_id,
+            "email": str(record.get("email") or ""),
+            "ok": failed == 0,
+            "status": import_status,
+            "error": import_error,
+            "result": outcome,
+        }
+
+    @app.post("/api/accounts/{account_id}/sub2api/import")
+    def api_account_sub2api_import(account_id: int) -> Dict[str, Any]:
+        """把已生成的 grok_build JSON 按名称幂等导入配置的远程 Sub2API。"""
+        from backend.integrations.sub2api_client import (
+            Sub2APIClient,
+            Sub2APIImportError,
+        )
+
+        gr = _gr()
+        gr.load_config()
+        store = gr.get_registration_repository()
+        rows = store.get_results_by_ids([account_id])
+        if not rows:
+            raise HTTPException(status_code=404, detail="记录不存在")
+        if not Sub2APIClient.is_configured(gr.config):
+            raise HTTPException(
+                status_code=400,
+                detail="请先在系统设置完整配置 Sub2API API 地址、管理员邮箱和密码",
+            )
+        try:
+            _find_account_auth_file(rows[0], gr.config, "grok2api")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            with Sub2APIClient.from_config(gr.config) as client:
+                outcome = _sub2api_import_record(rows[0], gr.config, client)
+        except Sub2APIImportError as exc:
+            store.update_remote_import_status(
+                account_id,
+                "sub2api",
+                status="failed",
+                error=str(exc),
+            )
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        refreshed = store.get_results_by_ids([account_id])[0]
+        return {"ok": outcome["ok"], "result": outcome["result"], "item": _serialize_record(refreshed)}
+
+    @app.post("/api/accounts/sub2api/import")
+    def api_accounts_sub2api_import(body: AccountIdsBody) -> Dict[str, Any]:
+        """批量把选中账号的 grok_build JSON 导入远程 Sub2API。"""
+        from backend.integrations.sub2api_client import (
+            Sub2APIClient,
+            Sub2APIImportError,
+        )
+
+        ids = _batch_account_ids(body.ids)
+        gr = _gr()
+        gr.load_config()
+        if not Sub2APIClient.is_configured(gr.config):
+            raise HTTPException(
+                status_code=400,
+                detail="请先在系统设置完整配置 Sub2API API 地址、管理员邮箱和密码",
+            )
+        store = gr.get_registration_repository()
+        records = store.get_results_by_ids(ids)
+        if not records:
+            raise HTTPException(status_code=404, detail="没有匹配的记录")
+        results: List[Dict[str, Any]] = []
+        try:
+            with Sub2APIClient.from_config(gr.config) as client:
+                for record in records:
+                    account_id = int(record.get("id") or 0)
+                    try:
+                        outcome = _sub2api_import_record(record, gr.config, client)
+                    except FileNotFoundError as exc:
+                        outcome = {
+                            "id": account_id,
+                            "email": str(record.get("email") or ""),
+                            "ok": False,
+                            "status": "failed",
+                            "error": str(exc),
+                            "result": {},
+                        }
+                    except (Sub2APIImportError, OSError, ValueError) as exc:
+                        store.update_remote_import_status(
+                            account_id,
+                            "sub2api",
+                            status="failed",
+                            error=str(exc),
+                        )
+                        outcome = {
+                            "id": account_id,
+                            "email": str(record.get("email") or ""),
+                            "ok": False,
+                            "status": "failed",
+                            "error": str(exc),
+                            "result": {},
+                        }
+                    results.append(outcome)
+        except Sub2APIImportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        success = sum(1 for item in results if item.get("ok"))
+        return {
+            "ok": success == len(results),
+            "total": len(results),
+            "success": success,
+            "failed": len(results) - success,
+            "results": results,
+        }
+
+    @app.post("/api/sub2api/test")
+    def api_sub2api_test() -> Dict[str, Any]:
+        """Sub2API 登录 + 分组列表冒烟测试，供设置页检测配置。"""
+        from backend.integrations.sub2api_client import (
+            Sub2APIClient,
+            Sub2APIImportError,
+        )
+
+        gr = _gr()
+        gr.load_config()
+        if not Sub2APIClient.is_configured(gr.config):
+            raise HTTPException(
+                status_code=400,
+                detail="请先完整配置 Sub2API API 地址、管理员邮箱和密码",
+            )
+        try:
+            with Sub2APIClient.from_config(gr.config) as client:
+                result = client.test_connection()
+        except Sub2APIImportError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return result
 
     @app.get("/api/accounts/{account_id}/failure-screenshot")
     def api_account_failure_screenshot(account_id: int) -> FileResponse:

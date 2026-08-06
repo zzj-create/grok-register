@@ -38,6 +38,10 @@ export type AccountRecord = {
   grok2api_remote_imported_at: string;
   grok2api_remote_error: string;
   grok2api_remote_configured: boolean;
+  sub2api_remote_status: string;
+  sub2api_remote_imported_at: string;
+  sub2api_remote_error: string;
+  sub2api_remote_configured: boolean;
   email_account_id: string;
   email_disable_status: string;
   email_disabled_at: string;
@@ -110,6 +114,28 @@ export type AuthArchiveDownload = {
   filename: string;
   exported: number;
   skipped: number;
+};
+
+export type Sub2APIImportOutcome = {
+  total?: number;
+  created?: number;
+  updated?: number;
+  failed?: number;
+  results?: Array<Record<string, any>>;
+};
+
+export type Sub2APIBatchResult = {
+  ok: boolean;
+  total: number;
+  success: number;
+  failed: number;
+  results: Array<{
+    id: number;
+    email: string;
+    ok: boolean;
+    status: string;
+    error: string;
+  }>;
 };
 
 export type ConfigFileSnapshot = {
@@ -246,6 +272,21 @@ export const api = {
       result: { created?: number; updated?: number; synced?: number; syncFailed?: number };
       item: AccountRecord;
     }>(`/api/accounts/${id}/grok2api/import`, { method: "POST" }),
+  importAccountToSub2API: (id: number) =>
+    request<{ ok: boolean; result: Sub2APIImportOutcome; item: AccountRecord }>(
+      `/api/accounts/${id}/sub2api/import`,
+      { method: "POST" }
+    ),
+  importAccountsToSub2API: (ids: number[]) =>
+    request<Sub2APIBatchResult>("/api/accounts/sub2api/import", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+  testSub2API: () =>
+    request<{ ok: boolean; message?: string; groups?: Array<{ id: number; name: string }>; group_count?: number }>(
+      "/api/sub2api/test",
+      { method: "POST" }
+    ),
   deleteAccounts: (ids: number[], deleteFiles = true) =>
     request<{ ok: boolean; deleted: number; deleted_files: number; side_lines: number; file_errors: string[] }>(
       "/api/accounts/delete",

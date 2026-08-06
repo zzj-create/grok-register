@@ -40,6 +40,9 @@ RESULT_COLUMNS = (
     "grok2api_remote_status",
     "grok2api_remote_imported_at",
     "grok2api_remote_error",
+    "sub2api_remote_status",
+    "sub2api_remote_imported_at",
+    "sub2api_remote_error",
     "email_account_id",
     "email_disable_status",
     "email_disabled_at",
@@ -112,6 +115,9 @@ class RegistrationRepository:
                     grok2api_remote_status TEXT NOT NULL DEFAULT 'not_configured',
                     grok2api_remote_imported_at TEXT NOT NULL DEFAULT '',
                     grok2api_remote_error TEXT NOT NULL DEFAULT '',
+                    sub2api_remote_status TEXT NOT NULL DEFAULT 'not_configured',
+                    sub2api_remote_imported_at TEXT NOT NULL DEFAULT '',
+                    sub2api_remote_error TEXT NOT NULL DEFAULT '',
                     email_account_id TEXT NOT NULL DEFAULT '',
                     email_disable_status TEXT NOT NULL DEFAULT 'not_attempted',
                     email_disabled_at TEXT NOT NULL DEFAULT '',
@@ -153,6 +159,9 @@ class RegistrationRepository:
                 "grok2api_remote_status": "TEXT NOT NULL DEFAULT 'not_configured'",
                 "grok2api_remote_imported_at": "TEXT NOT NULL DEFAULT ''",
                 "grok2api_remote_error": "TEXT NOT NULL DEFAULT ''",
+                "sub2api_remote_status": "TEXT NOT NULL DEFAULT 'not_configured'",
+                "sub2api_remote_imported_at": "TEXT NOT NULL DEFAULT ''",
+                "sub2api_remote_error": "TEXT NOT NULL DEFAULT ''",
             }
             for column, definition in migrations.items():
                 if column not in existing_columns:
@@ -222,6 +231,13 @@ class RegistrationRepository:
                 record.get("grok2api_remote_imported_at") or ""
             ),
             "grok2api_remote_error": str(record.get("grok2api_remote_error") or ""),
+            "sub2api_remote_status": str(
+                record.get("sub2api_remote_status") or "not_configured"
+            ),
+            "sub2api_remote_imported_at": str(
+                record.get("sub2api_remote_imported_at") or ""
+            ),
+            "sub2api_remote_error": str(record.get("sub2api_remote_error") or ""),
             "email_account_id": str(record.get("email_account_id") or ""),
             "email_disable_status": str(
                 record.get("email_disable_status") or "not_attempted"
@@ -447,6 +463,15 @@ class RegistrationRepository:
                         "grok2api_remote_error": str(
                             detail.get("grok2api_remote_error") or ""
                         ),
+                        "sub2api_remote_status": str(
+                            detail.get("sub2api_remote_status") or "not_configured"
+                        ),
+                        "sub2api_remote_imported_at": str(
+                            detail.get("sub2api_remote_imported_at") or ""
+                        ),
+                        "sub2api_remote_error": str(
+                            detail.get("sub2api_remote_error") or ""
+                        ),
                     }
                 )
                 assignments.extend(
@@ -465,6 +490,9 @@ class RegistrationRepository:
                         "grok2api_remote_status = :grok2api_remote_status",
                         "grok2api_remote_imported_at = :grok2api_remote_imported_at",
                         "grok2api_remote_error = :grok2api_remote_error",
+                        "sub2api_remote_status = :sub2api_remote_status",
+                        "sub2api_remote_imported_at = :sub2api_remote_imported_at",
+                        "sub2api_remote_error = :sub2api_remote_error",
                     ]
                 )
                 if relogin_status == "success" and not screenshot_path:
@@ -484,10 +512,10 @@ class RegistrationRepository:
         error: str = "",
         imported_at: str = "",
     ) -> bool:
-        """更新 CPA 或 Grok2API 的远程入库状态。"""
+        """更新 CPA、Grok2API 或 Sub2API 的远程入库状态。"""
         normalized_kind = str(kind or "").strip().lower()
-        if normalized_kind not in {"cpa", "grok2api"}:
-            raise ValueError("kind 必须是 cpa 或 grok2api")
+        if normalized_kind not in {"cpa", "grok2api", "sub2api"}:
+            raise ValueError("kind 必须是 cpa、grok2api 或 sub2api")
         try:
             normalized_id = int(account_id)
         except (TypeError, ValueError):

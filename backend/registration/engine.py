@@ -27,6 +27,7 @@ from curl_cffi import requests
 # 授权交换和导出逻辑集中在 integrations 包，编排层只负责调用。
 from backend.integrations import auth_exchange as _s2cpa
 from backend.integrations import grok2api_client as _grok2api
+from backend.integrations import sub2api_client as _sub2api
 from backend.mailbox import cloudflare_worker as cloudflare_provider
 from backend.mailbox import cloud_mail as cloudmail_provider
 from backend.mailbox import duck_mail as duckmail_provider
@@ -210,6 +211,17 @@ DEFAULT_CONFIG = {
     "grok2api_remote_username": "",
     "grok2api_remote_password": "",
     "grok2api_auto_import": True,
+    # 远程 Sub2API 管理端：邮箱密码登录后按名称幂等导入 grok/oauth 账号
+    "sub2api_remote_url": "",
+    "sub2api_remote_email": "",
+    "sub2api_remote_password": "",
+    "sub2api_group_id": 0,
+    "sub2api_group_name": "grok-register",
+    "sub2api_auto_create_group": True,
+    "sub2api_auto_import": False,
+    "sub2api_account_concurrency": 3,
+    "sub2api_account_priority": 50,
+    "sub2api_account_rate_multiplier": 1.0,
     "mailnest_api_key": "",
     "mailnest_project_code": "x-ai001",
     # YYDS：留空自动选已验证域名；填写则固定该域名
@@ -504,6 +516,13 @@ def persist_registration_result(
                     "grok2api_remote_imported_at", ""
                 ),
                 "grok2api_remote_error": detail.get("grok2api_remote_error", ""),
+                "sub2api_remote_status": detail.get(
+                    "sub2api_remote_status", "not_configured"
+                ),
+                "sub2api_remote_imported_at": detail.get(
+                    "sub2api_remote_imported_at", ""
+                ),
+                "sub2api_remote_error": detail.get("sub2api_remote_error", ""),
                 "email_account_id": disable_detail.get("account_id", ""),
                 "email_disable_status": disable_detail.get("status", "not_attempted"),
                 "email_disabled_at": disable_detail.get("disabled_at", ""),
@@ -907,7 +926,7 @@ def ensure_sso_oauth_eligible(raw_token, email="", log_callback=None) -> dict:
         return {}
     if not any(
         str(config.get(key, "") or "").strip()
-        for key in ("cpa_auth_dir", "cpa_remote_url", "grok2api_auth_dir")
+        for key in ("cpa_auth_dir", "cpa_remote_url", "grok2api_auth_dir", "sub2api_remote_url")
     ):
         return {}
     sso = _normalize_sso_token(raw_token)
@@ -962,6 +981,9 @@ def add_sso_to_cpa(raw_token, email="", log_callback=None, result_out=None) -> b
         grok2api_remote_status="not_configured",
         grok2api_remote_imported_at="",
         grok2api_remote_error="",
+        sub2api_remote_status="not_configured",
+        sub2api_remote_imported_at="",
+        sub2api_remote_error="",
         error="",
     )
     if not cpa_enabled:
@@ -974,9 +996,12 @@ def add_sso_to_cpa(raw_token, email="", log_callback=None, result_out=None) -> b
     g2a_dir = str(config.get("grok2api_auth_dir", "") or "").strip()
     g2a_remote_configured = _grok2api.Grok2APIClient.is_configured(config)
     g2a_auto_import = bool(config.get("grok2api_auto_import", False))
+    sub2api_configured = _sub2api.Sub2APIClient.is_configured(config)
+    sub2api_auto_import = bool(config.get("sub2api_auto_import", False))
     _set_result(
         cpa_remote_status="ready" if remote_url and management_key else "not_configured",
         grok2api_remote_status="ready" if g2a_remote_configured else "not_configured",
+        sub2api_remote_status="ready" if sub2api_configured else "not_configured",
     )
 
     # 相对路径基于项目根目录解析，并自动创建目录
@@ -986,11 +1011,11 @@ def add_sso_to_cpa(raw_token, email="", log_callback=None, result_out=None) -> b
         g2a_dir = os.path.join(APP_DIR, g2a_dir)
 
     preflight_errors = []
-    if not auth_dir and not remote_url and not g2a_dir:
-        _set_result(status="skipped", error="未配置 CPA/Grok2API 授权目标")
+    if not auth_dir and not remote_url and not g2a_dir and not sub2api_configured:
+        _set_result(status="skipped", error="未配置 CPA/Grok2API/Sub2API 授权目标")
         if log_callback:
             log_callback(
-                "[Debug] 已开启 SSO→auth 但未配置 cpa_auth_dir / cpa_remote_url / grok2api_auth_dir，跳过"
+                "[Debug] 已开启 SSO→auth 但未配置 cpa_auth_dir / cpa_remote_url / grok2api_auth_dir / Sub2API，跳过"
             )
         return True
     if remote_url and not management_key:
@@ -1000,8 +1025,8 @@ def add_sso_to_cpa(raw_token, email="", log_callback=None, result_out=None) -> b
         if log_callback:
             log_callback("[Debug] 已配置 cpa_remote_url 但未配置 cpa_management_key，跳过远程上传")
         remote_url = ""
-    if not auth_dir and not remote_url and not g2a_dir:
-        error_text = "; ".join(preflight_errors) or "没有可用的 CPA/Grok2API 授权目标"
+    if not auth_dir and not remote_url and not g2a_dir and not sub2api_configured:
+        error_text = "; ".join(preflight_errors) or "没有可用的 CPA/Grok2API/Sub2API 授权目标"
         _set_result(status="skipped", auth_info=list(preflight_errors), error=error_text)
         return True
     sso = _normalize_sso_token(raw_token)
@@ -1162,8 +1187,40 @@ def add_sso_to_cpa(raw_token, email="", log_callback=None, result_out=None) -> b
             except Exception as g2a_exc:
                 _cpa_log(f"Grok2API 写入失败: {g2a_exc}")
                 auth_errors.append(f"Grok2API 失败: {g2a_exc}")
+        if sub2api_configured and sub2api_auto_import:
+            try:
+                _cpa_log(
+                    "Sub2API 远程导入网络: 直连 -> "
+                    f"{str(config.get('sub2api_remote_url') or '').rstrip('/')}"
+                )
+                sub2api_entry = _s2cpa.token_to_grok2api_account(token, email=email)
+                with _sub2api.Sub2APIClient.from_config(config) as client:
+                    sub2api_result = client.import_account_entry(sub2api_entry)
+                _cpa_log(
+                    "已导入远程 Sub2API "
+                    f"({sub2api_result.get('action')}, "
+                    f"group_id={sub2api_result.get('group_id')}, "
+                    f"remote_id={sub2api_result.get('remote_id')})"
+                )
+                auth_entries.append(
+                    f"Sub2API 远程: {str(config.get('sub2api_remote_url') or '').rstrip('/')}"
+                )
+                wrote_ok = True
+                _set_result(
+                    sub2api_remote_status="success",
+                    sub2api_remote_imported_at=RegistrationRepository.now_text(),
+                    sub2api_remote_error="",
+                    sub2api_remote_result=sub2api_result,
+                )
+            except Exception as remote_sub2api_exc:
+                _cpa_log(f"Sub2API 远程导入失败: {remote_sub2api_exc}")
+                auth_errors.append(f"Sub2API 远程失败: {remote_sub2api_exc}")
+                _set_result(
+                    sub2api_remote_status="failed",
+                    sub2api_remote_error=str(remote_sub2api_exc),
+                )
         if not wrote_ok:
-            error_text = "; ".join(auth_errors) or "CPA/Grok2API 均未写入成功"
+            error_text = "; ".join(auth_errors) or "CPA/Grok2API/Sub2API 均未写入成功"
             _set_result(
                 status="failed",
                 auth_info=auth_entries + auth_errors,
@@ -1172,7 +1229,7 @@ def add_sso_to_cpa(raw_token, email="", log_callback=None, result_out=None) -> b
                 grok2api_auth_path=grok2api_auth_path_value,
                 error=error_text,
             )
-            _cpa_log("token 已换出但 CPA/Grok2API 均未写入成功")
+            _cpa_log("token 已换出但 CPA/Grok2API/Sub2API 均未写入成功")
             _append_sso_pending(email, sso, log_callback=log_callback)
             return False
         _set_result(

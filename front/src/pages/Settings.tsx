@@ -5,11 +5,13 @@ import {
   Eye,
   EyeOff,
   FileJson,
+  Loader2,
   Mail,
   RefreshCw,
   Save,
   Settings2,
   ShieldCheck,
+  UploadCloud,
   X,
 } from "lucide-react";
 import { api, type ConfigFileSnapshot } from "@/lib/api";
@@ -169,6 +171,7 @@ export function SettingsPage() {
   const [configFile, setConfigFile] = useState<ConfigFileSnapshot | null>(null);
   const [configFileError, setConfigFileError] = useState("");
   const [showConfigSecrets, setShowConfigSecrets] = useState(true);
+  const [sub2apiTesting, setSub2apiTesting] = useState(false);
   const [toast, setToast] = useState<{ message: string; tone?: "default" | "success" | "error" }>({
     message: "",
   });
@@ -221,6 +224,20 @@ export function SettingsPage() {
       showToast(err.message || "保存失败", "error");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const onTestSub2API = async () => {
+    setSub2apiTesting(true);
+    try {
+      // 测试读取的是服务端已保存的配置，先落库再测试，保证表单改动生效
+      await api.saveConfig(config);
+      const result = await api.testSub2API();
+      showToast(`Sub2API 连接成功，共 ${result.group_count ?? result.groups?.length ?? 0} 个分组`, "success");
+    } catch (err: any) {
+      showToast(err.message || "Sub2API 连接失败", "error");
+    } finally {
+      setSub2apiTesting(false);
     }
   };
 
@@ -425,7 +442,7 @@ export function SettingsPage() {
             </CardContent>
           </Card>
 
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
             <Card>
               <CardHeader>
                 <CardTitle>CPA 目标</CardTitle>
@@ -460,6 +477,64 @@ export function SettingsPage() {
                   checked={!!config.grok2api_auto_import}
                   onCheckedChange={(value) => setField("grok2api_auto_import", value)}
                 />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Sub2API 目标</CardTitle>
+                <CardDescription>通过管理员邮箱登录 sub2api，按名称幂等导入 grok/oauth 账号。</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4">
+                <ConfigField
+                  {...fieldState}
+                  label="远程 API 地址"
+                  field="sub2api_remote_url"
+                  placeholder="https://sub2api.example.com"
+                  helper="填写站点根地址，不要附加 /api/v1"
+                />
+                <ConfigField {...fieldState} label="管理员邮箱" field="sub2api_remote_email" placeholder="admin@example.com" />
+                <ConfigField {...fieldState} label="管理员密码" field="sub2api_remote_password" type="password" />
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <ConfigField
+                    {...fieldState}
+                    label="分组名称"
+                    field="sub2api_group_name"
+                    helper="留空使用 grok-register"
+                  />
+                  <ConfigField
+                    {...fieldState}
+                    label="分组 ID"
+                    field="sub2api_group_id"
+                    type="number"
+                    helper="填 0 按名称匹配或自动创建"
+                  />
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <ConfigField {...fieldState} label="每账号并发" field="sub2api_account_concurrency" type="number" />
+                  <ConfigField {...fieldState} label="每账号优先级" field="sub2api_account_priority" type="number" />
+                </div>
+                <ToggleRow
+                  title="转换成功后自动导入"
+                  description="SSO 换 token 成功后立即推送到 Sub2API；同名账号自动刷新凭据，导入结果单独记录"
+                  checked={!!config.sub2api_auto_import}
+                  onCheckedChange={(value) => setField("sub2api_auto_import", value)}
+                />
+                <div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void onTestSub2API()}
+                    disabled={sub2apiTesting}
+                  >
+                    {sub2apiTesting ? (
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <UploadCloud className="h-4 w-4" aria-hidden="true" />
+                    )}
+                    {sub2apiTesting ? "正在测试连接" : "测试连接"}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           </div>

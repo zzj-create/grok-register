@@ -1,4 +1,4 @@
-import { Archive, ChevronDown, ListChecks, Loader2, LogIn, Trash2 } from "lucide-react";
+import { Archive, ChevronDown, ListChecks, Loader2, LogIn, Trash2, UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui";
 
 export function AccountBatchActions({
@@ -9,6 +9,7 @@ export function AccountBatchActions({
   onToggleMenu,
   onCloseMenu,
   onExport,
+  onImportSub2API,
   onRelogin,
   onDelete,
 }: {
@@ -19,6 +20,7 @@ export function AccountBatchActions({
   onToggleMenu: () => void;
   onCloseMenu: () => void;
   onExport: (kind: "cpa" | "grok2api") => void;
+  onImportSub2API: () => void;
   onRelogin: () => void;
   onDelete: () => void;
 }) {
@@ -69,6 +71,15 @@ export function AccountBatchActions({
             >
               <Archive className="h-4 w-4" aria-hidden="true" />
               导出 Grok2API JSON 压缩包
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm font-medium hover:bg-muted"
+              onClick={onImportSub2API}
+            >
+              <UploadCloud className="h-4 w-4" aria-hidden="true" />
+              导入到 Sub2API
             </button>
             <button
               type="button"
