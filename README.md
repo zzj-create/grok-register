@@ -162,7 +162,7 @@ Windows 启动：
 | `email_provider` | 邮箱服务商 |
 | `register_count` | 注册数量 |
 | `register_workers` | 并发数量，默认 1 |
-| `proxy` | 注册和 OAuth 请求使用的代理 |
+| `proxy` | 注册和 OAuth 请求使用的代理；支持 `http://host:port`、`https://host:port`、带认证的 `socks5://username:password@host:port`，以及供应商常见的 `host:port@username:password` HTTP 写法 |
 | `browser_headless` | 本机无头模式；Docker 中强制关闭 |
 | `cpa_auto_add` | 注册后生成 CPA 授权 |
 | `cpa_auth_dir` | CPA JSON 保存目录 |

@@ -333,7 +333,13 @@ export function SettingsPage() {
               </Select>
               <p className="text-xs leading-5 text-muted-foreground">{selectedProvider.description}</p>
             </div>
-            <ConfigField {...fieldState} label="网络代理" field="proxy" placeholder="http://127.0.0.1:7890" />
+            <ConfigField
+              {...fieldState}
+              label="网络代理"
+              field="proxy"
+              placeholder="socks5://username:password@host:port"
+              helper="支持 http://host:port、https://host:port、socks5://username:password@host:port，以及 host:port@username:password。用户名或密码含特殊字符时请先进行 URL 编码。"
+            />
             <ConfigField {...fieldState}
               label="账号间隔（秒）"
               field="account_interval"

@@ -28,6 +28,7 @@ from .account_exports import build_account_auth_archive
 from .jobs import job_coordinator
 from .relogin_jobs import relogin_coordinator
 from backend.shared.paths import DATA_ROOT, PROJECT_ROOT, STATIC_ROOT
+from backend.integrations.proxy import parse_proxy_url
 
 APP_DIR = PROJECT_ROOT
 DATA_DIR = DATA_ROOT
@@ -106,6 +107,7 @@ SENSITIVE_HINT_KEYS = {
     "mailnest_api_key",
     "yyds_api_key",
     "yyds_jwt",
+    "proxy",
 }
 
 
@@ -361,6 +363,11 @@ def _apply_config_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
             "cloudflare_api_base",
         ):
             value = str(value or "").strip()
+            if key == "proxy" and value:
+                try:
+                    parse_proxy_url(value)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
             if isinstance(value, (dict, list)):
                 continue

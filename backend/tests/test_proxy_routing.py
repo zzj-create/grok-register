@@ -34,6 +34,46 @@ class ProxyRoutingTests(unittest.TestCase):
         options = browser_session.create_browser_options(unique_profile=False)
         self.assertEqual(options["proxy"], {"server": "http://127.0.0.1:7897"})
 
+    def test_camoufox_supports_authenticated_socks5_url(self):
+        browser_session.configure(
+            get_proxies=lambda: {
+                "http": "socks5://user%40name:p%40ss@proxy.example:1080",
+                "https": "socks5://user%40name:p%40ss@proxy.example:1080",
+            },
+            is_debug=lambda: False,
+            is_headless=lambda: False,
+            get_locale=lambda: "en-US",
+        )
+        options = browser_session.create_browser_options(unique_profile=False)
+        self.assertEqual(
+            options["proxy"],
+            {
+                "server": "socks5://proxy.example:1080",
+                "username": "user@name",
+                "password": "p@ss",
+            },
+        )
+
+    def test_camoufox_supports_reverse_http_auth_url(self):
+        browser_session.configure(
+            get_proxies=lambda: {
+                "http": "us.cliproxy.io:3010@user-region:secret-pass",
+                "https": "us.cliproxy.io:3010@user-region:secret-pass",
+            },
+            is_debug=lambda: False,
+            is_headless=lambda: False,
+            get_locale=lambda: "en-US",
+        )
+        options = browser_session.create_browser_options(unique_profile=False)
+        self.assertEqual(
+            options["proxy"],
+            {
+                "server": "http://us.cliproxy.io:3010",
+                "username": "user-region",
+                "password": "secret-pass",
+            },
+        )
+
     def test_actual_http_route_log_deduplicates_query_variants(self):
         logs = []
         with mock.patch.object(gr, "registration_log", side_effect=logs.append):
@@ -112,6 +152,92 @@ class ProxyRoutingTests(unittest.TestCase):
             http_get.call_args.kwargs["proxies"],
             {"http": proxy, "https": proxy},
         )
+
+    def test_connectivity_checks_normalize_reverse_http_proxy(self):
+        response = mock.Mock(status_code=200, text="ip=203.0.113.10\nloc=US", headers={})
+        http_get = mock.Mock(return_value=response)
+        raw = "us.cliproxy.io:3010@user-region-US-sid-demo:secret"
+        with mock.patch.object(network_checks, "_tcp_open", return_value=True):
+            _, ok, detail = network_checks.check_proxy(raw, http_get)
+        self.assertTrue(ok, detail)
+        normalized = "http://user-region-US-sid-demo:secret@us.cliproxy.io:3010"
+        self.assertEqual(
+            http_get.call_args.kwargs["proxies"],
+            {"http": normalized, "https": normalized},
+        )
+
+        http_get.reset_mock()
+        _, ok, detail = network_checks.check_xai_signup(raw, http_get)
+        self.assertTrue(ok, detail)
+        self.assertEqual(
+            http_get.call_args.kwargs["proxies"],
+            {"http": normalized, "https": normalized},
+        )
+
+    def test_cpa_proxy_environment_normalizes_reverse_http_proxy(self):
+        gr.config["proxy"] = ""
+        raw = "us.cliproxy.io:3010@user-region-US-sid-demo:secret"
+        with mock.patch.dict("os.environ", {"HTTPS_PROXY": raw}, clear=False):
+            self.assertEqual(
+                gr._resolve_cpa_proxy(),
+                "http://user-region-US-sid-demo:secret@us.cliproxy.io:3010",
+            )
+
+    def test_route_log_redacts_authenticated_proxy(self):
+        logs = []
+        with mock.patch.object(gr, "registration_log", side_effect=logs.append):
+            gr.reset_network_route_logs()
+            gr._log_actual_http_route(
+                "GET",
+                "https://accounts.x.ai/",
+                proxies={
+                    "https": "socks5://user:secret@proxy.example:1080",
+                },
+            )
+        self.assertIn("socks5://***:***@proxy.example:1080", logs[0])
+        self.assertNotIn("secret", logs[0])
+
+    def test_route_log_redacts_reverse_http_proxy(self):
+        logs = []
+        with mock.patch.object(gr, "registration_log", side_effect=logs.append):
+            gr.reset_network_route_logs()
+            gr._log_actual_http_route(
+                "GET",
+                "https://accounts.x.ai/",
+                proxies={"https": "us.cliproxy.io:3010@user:secret"},
+            )
+        self.assertIn("http://***:***@us.cliproxy.io:3010", logs[0])
+        self.assertNotIn("secret", logs[0])
+
+    def test_oauth_urlopen_uses_curl_for_socks5(self):
+        request = auth_exchange.urllib.request.Request(
+            "https://auth.x.ai/oauth2/token",
+            data=b"grant_type=device_code",
+            method="POST",
+            headers={"Accept": "application/json"},
+        )
+        response = mock.Mock(status_code=200, reason="OK", url=request.full_url)
+        response.content = b"ok"
+        response.headers = {}
+        session = mock.MagicMock()
+        session.__enter__.return_value = session
+        session.__exit__.return_value = False
+        session.request.return_value = response
+        with mock.patch.object(
+            auth_exchange.requests, "Session", return_value=session
+        ) as factory:
+            result = auth_exchange._urlopen(
+                request,
+                proxy="socks5://user:secret@proxy.example:1080",
+                timeout=7,
+            )
+        self.assertEqual(result.read(), b"ok")
+        factory.assert_called_once_with(trust_env=False)
+        self.assertEqual(session.request.call_args.kwargs["proxies"], {
+            "http": "socks5://user:secret@proxy.example:1080",
+            "https": "socks5://user:secret@proxy.example:1080",
+        })
+        self.assertEqual(session.request.call_args.kwargs["timeout"], 7)
 
     def test_outlook_connectivity_check_uses_direct_default_http(self):
         response = mock.Mock(status_code=200)

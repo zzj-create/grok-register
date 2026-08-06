@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.shared.paths import DATA_ROOT
+from backend.integrations.proxy import normalize_proxy_url
 
 from curl_cffi import requests
 
@@ -180,13 +181,73 @@ def rfc3339_ns(ts: float | None = None) -> str:
 
 
 def _urlopen(req, proxy: str = "", timeout: int = 15):
-    """urllib 请求，proxy 非空时走代理。"""
-    if proxy:
-        opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+    """Open an OAuth request with the configured proxy, including SOCKS5.
+
+    ``urllib.request.ProxyHandler`` only supports HTTP proxies.  The OAuth
+    fallback still builds ``urllib`` request objects, so send those requests
+    through curl_cffi, whose libcurl backend supports authenticated SOCKS5.
+    The returned response intentionally exposes the small ``read``/``status``
+    surface used by the legacy callers.
+    """
+    proxy_value = normalize_proxy_url(proxy)
+    scheme = urllib.parse.urlparse(proxy_value).scheme.lower() if proxy_value else ""
+    if not scheme.startswith("socks"):
+        if proxy_value:
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({"http": proxy_value, "https": proxy_value})
+            )
+            return opener.open(req, timeout=timeout)
+        return urllib.request.urlopen(req, timeout=timeout)
+
+    method = str(getattr(req, "method", None) or "GET").upper()
+    url = str(getattr(req, "full_url", None) or getattr(req, "selector", ""))
+    headers = dict(getattr(req, "headers", {}) or {})
+    data = getattr(req, "data", None)
+    # The top-level curl_cffi request helper does not expose ``trust_env``;
+    # use an explicit session so ambient HTTP(S)_PROXY variables cannot alter
+    # the OAuth route while the configured SOCKS proxy is in use.
+    with requests.Session(trust_env=False) as session:
+        response = session.request(
+            method,
+            url,
+            headers=headers,
+            data=data,
+            proxies={"http": proxy_value, "https": proxy_value},
+            timeout=timeout,
+            impersonate="chrome",
         )
-        return opener.open(req, timeout=timeout)
-    return urllib.request.urlopen(req, timeout=timeout)
+
+    class _CurlResponseAdapter:
+        status = response.status_code
+        reason = response.reason
+        url = response.url
+        headers = response.headers
+
+        def read(self, amt=-1):
+            body = response.content
+            return body if amt is None or amt < 0 else body[:amt]
+
+        def geturl(self):
+            return self.url
+
+        def getcode(self):
+            return self.status
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    if response.status_code >= 400:
+        raise urllib.error.HTTPError(
+            url,
+            response.status_code,
+            response.reason,
+            response.headers,
+            None,
+        )
+    return _CurlResponseAdapter()
 
 
 def _gen_pkce() -> tuple[str, str, str, str]:
@@ -321,6 +382,7 @@ def _discover_action_ids_from_js(session, html: str, base_url: str = "https://ac
 
 def _new_sso_session(sso_cookie: str, proxy: str = ""):
     """创建带 SSO cookie 的 curl_cffi Session。"""
+    proxy = normalize_proxy_url(proxy)
     proxies = {"http": proxy, "https": proxy} if proxy else None
     s = requests.Session()
     if proxies:
@@ -478,6 +540,7 @@ def request_device_code(proxy: str = "", log=print, session=None) -> dict | None
     own = False
     if s is None:
         own = True
+        proxy = normalize_proxy_url(proxy)
         proxies = {"http": proxy, "https": proxy} if proxy else None
         s = requests.Session()
         if proxies:
@@ -574,6 +637,7 @@ def poll_device_token(
     own = False
     if s is None:
         own = True
+        proxy = normalize_proxy_url(proxy)
         proxies = {"http": proxy, "https": proxy} if proxy else None
         s = requests.Session()
         if proxies:
@@ -1235,6 +1299,7 @@ def probe_cpa_record(
         "impersonate": "chrome",
         "timeout": timeout,
     }
+    proxy = normalize_proxy_url(proxy)
     if proxy:
         kwargs["proxy"] = proxy
     try:
@@ -1372,6 +1437,7 @@ def upload_cpa_auth_remote(
 
     name = cpa_auth_filename(record)
     url = f"{base}/v0/management/auth-files"
+    proxy = normalize_proxy_url(proxy)
     proxies = {"http": proxy, "https": proxy} if proxy else None
     # 不继承 HTTP_PROXY/HTTPS_PROXY；调用方如确实需要代理，必须显式传 proxy。
     with requests.Session(trust_env=False) as session:

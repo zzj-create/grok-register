@@ -76,7 +76,7 @@ GROK_WEB_COOKIE_SECURE=0
 GROK_WEB_COOKIE_SECURE=1
 ```
 
-如果 `data/config.json` 中的代理是 `http://127.0.0.1:7897`，Compose 会自动改用宿主机地址 `host.docker.internal:7897`。宿主机代理软件必须开启“允许局域网连接”或监听 `0.0.0.0`，否则容器仍然连不上。
+如果 `data/config.json` 中的代理是 `http://127.0.0.1:7897`，Compose 会自动改用宿主机地址 `host.docker.internal:7897`。也支持带认证的 SOCKS5 URL，例如 `socks5://username:password@host:port`，以及 HTTP 供应商常见的反向认证写法 `host:port@username:password`；用户名和密码中的 `@`、`:` 等特殊字符应先 URL 编码。宿主机代理软件必须开启“允许局域网连接”或监听 `0.0.0.0`，否则容器仍然连不上。
 
 ## 可选 OutlookEmail 邮箱池
 

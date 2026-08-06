@@ -15,7 +15,6 @@ import threading
 import time
 import uuid
 from typing import Callable, Optional, Tuple
-from urllib.parse import urlparse
 
 import asyncio
 from greenlet import greenlet
@@ -30,6 +29,7 @@ from playwright._impl._transport import PipeTransport as _PwPipeTransport
 from playwright.sync_api._generated import Playwright as _SyncPlaywright
 
 from backend.automation.page_adapter import CamoufoxBrowser, CamoufoxPage
+from backend.integrations.proxy import parse_proxy_url, redact_proxy_url
 
 
 class IsolatedCamoufox(_Camoufox):
@@ -381,22 +381,34 @@ def kill_all_camoufox_processes(log_callback=None) -> dict:
 
 
 def _build_camoufox_proxy(proxy_str: str) -> dict:
-    """把 http://host:port 格式的代理 URL 转换为 Camoufox/Playwright proxy dict。"""
-    proxy_str = proxy_str.strip()
-    if not proxy_str:
+    """Convert a proxy URL to the Playwright/Camoufox proxy structure.
+
+    Playwright requires proxy credentials as separate fields.  Keeping the
+    credentials in ``server`` makes authenticated SOCKS5 URLs fail on some
+    Firefox/Camoufox versions, so always split them here.
+    """
+    value = str(proxy_str or "").strip()
+    if not value:
         return {}
-    parsed = urlparse(proxy_str)
-    if parsed.scheme and parsed.hostname:
-        server = f"{parsed.scheme}://{parsed.hostname}"
-        if parsed.port:
-            server += f":{parsed.port}"
+
+    parsed = parse_proxy_url(value)
+    if not parsed["has_scheme"]:
+        # Preserve the historical host:port form for HTTP proxies without a
+        # scheme; URL forms (including socks5://...) use an explicit server.
+        server = value
     else:
-        server = proxy_str
+        host = parsed["hostname"]
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        server = f"{parsed['scheme']}://{host}"
+        if parsed["port"] is not None:
+            server += f":{parsed['port']}"
+
     result: dict = {"server": server}
-    if parsed.username:
-        result["username"] = parsed.username
-    if parsed.password:
-        result["password"] = parsed.password
+    if parsed["username"]:
+        result["username"] = parsed["username"]
+    if parsed["password"]:
+        result["password"] = parsed["password"]
     return result
 
 
@@ -597,6 +609,10 @@ def start_browser(log_callback=None) -> Tuple[object, object]:
                 log_callback(f"[*] 浏览器语言: {opts['locale']}")
                 proxy_options = opts.get("proxy") if isinstance(opts.get("proxy"), dict) else {}
                 proxy_server = str(proxy_options.get("server") or "").strip()
+                if proxy_options.get("username") or proxy_options.get("password"):
+                    proxy_server = redact_proxy_url(
+                        proxy_server.replace("://", "://***:***@", 1)
+                    )
                 log_callback(
                     f"[*] Camoufox 网络: {'代理 ' + proxy_server if proxy_server else '直连（未配置代理）'}"
                 )

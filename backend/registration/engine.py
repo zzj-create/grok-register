@@ -41,7 +41,7 @@ from backend.automation import session as _bs
 from backend.registration import signup_flow as _rf
 from backend.integrations import network_checks as _conn
 from backend.registration.store import RegistrationRepository
-from backend.integrations.proxy import resolve_proxy_url
+from backend.integrations.proxy import normalize_proxy_url, redact_proxy_url, resolve_proxy_url
 from backend.shared.paths import DATA_ROOT, PROJECT_ROOT
 from backend.automation.session import (
     browser,
@@ -607,7 +607,7 @@ def _log_actual_http_route(method, url, *, proxies=None, proxy=""):
             or proxies.get("http")
             or ""
         ).strip()
-    route = f"代理 {proxy_value}" if proxy_value else "直连（不使用代理）"
+    route = f"代理 {redact_proxy_url(proxy_value)}" if proxy_value else "直连（不使用代理）"
     key = (str(method or "GET").upper(), display_url, route)
     with _network_route_log_lock:
         if key in _network_route_log_keys:
@@ -869,7 +869,7 @@ def _resolve_cpa_proxy():
     for key in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"):
         val = str(os.environ.get(key, "") or "").strip()
         if val:
-            return val
+            return normalize_proxy_url(val)
     return ""
 
 
@@ -1024,7 +1024,10 @@ def add_sso_to_cpa(raw_token, email="", log_callback=None, result_out=None) -> b
             "device_browser": "浏览器 Device Flow",
             "auth_code": "Authorization Code",
         }
-        _cpa_log(f"SSO → {_mode_labels.get(token_mode, token_mode)} 换 token (proxy={proxy}) ...")
+        _cpa_log(
+            f"SSO → {_mode_labels.get(token_mode, token_mode)} 换 token "
+            f"(proxy={redact_proxy_url(proxy)}) ..."
+        )
 
         def _browser_approve(user_code, open_url):
             return authorize_device_in_browser(

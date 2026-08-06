@@ -11,7 +11,7 @@ from typing import Callable, List, Tuple
 from urllib.parse import urlparse
 
 from backend.mailbox import cloudflare_worker as cloudflare_provider
-from backend.integrations.proxy import resolve_proxy_url
+from backend.integrations.proxy import normalize_proxy_url, resolve_proxy_url
 from backend.shared.paths import resolve_project_path
 
 CheckResult = Tuple[str, bool, str]  # name, ok, detail
@@ -55,7 +55,7 @@ def _trace_exit_ip(http_get: Callable, proxies: dict) -> str:
 
 
 def check_proxy(proxy_url: str, http_get: Callable) -> CheckResult:
-    proxy_url = (proxy_url or "").strip()
+    proxy_url = normalize_proxy_url(proxy_url)
     if not proxy_url:
         # 直连也打印出口 IP，方便与走代理时对比确认代理是否生效
         try:
@@ -89,7 +89,7 @@ def check_proxy(proxy_url: str, http_get: Callable) -> CheckResult:
 
 def check_xai_signup(proxy_url: str, http_get: Callable) -> CheckResult:
     """按注册浏览器同一出口检查 accounts.x.ai，CF 拦截时禁止继续建号。"""
-    proxy_url = str(proxy_url or "").strip()
+    proxy_url = normalize_proxy_url(proxy_url)
     proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else {}
     try:
         resp = http_get(
