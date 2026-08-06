@@ -7,6 +7,7 @@ from unittest import mock
 
 from backend.registration import engine
 from backend.registration.store import RegistrationRepository
+from backend.web.jobs import RegistrationJobCoordinator
 from backend.web.reregister_jobs import ReregisterJobCoordinator
 
 
@@ -86,6 +87,24 @@ class ReregisterValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "正在重新注册"):
             self.coordinator.start(rid)
         self.coordinator._thread.join(timeout=10)
+
+    def test_logs_flow_to_shared_panel_without_touching_job_progress(self):
+        rid = _failed_record(self.repo)
+        panel = RegistrationJobCoordinator()
+        self.coordinator._run_record = lambda record, store: ""
+        with mock.patch("backend.web.jobs.job_coordinator", panel):
+            self.coordinator.start(rid)
+            self.coordinator._thread.join(timeout=10)
+        messages = [item["message"] for item in panel.get_logs()]
+        self.assertTrue(any("重新注册任务启动" in m for m in messages))
+        self.assertTrue(any("开始重新注册 1/1" in m for m in messages))
+        self.assertTrue(any("重新注册任务结束" in m for m in messages))
+        # 外部日志不得污染注册任务的进度与阶段
+        job_status = panel.status()
+        self.assertEqual(job_status["completed_count"], 0)
+        self.assertEqual(job_status["success_count"], 0)
+        self.assertEqual(job_status["target_count"], 0)
+        self.assertEqual(job_status["current_stage"], "等待启动")
 
 
 class ReregisterResultMappingTests(unittest.TestCase):

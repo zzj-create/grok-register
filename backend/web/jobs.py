@@ -108,6 +108,23 @@ class RegistrationJobCoordinator:
                 }
             )
 
+    def append_external_log(self, message: str) -> None:
+        """追加一条非注册任务（如重新注册/重新登录）的日志。
+
+        外部日志只进入共享日志面板，不触发注册任务的进度计数与阶段更新，
+        避免污染 job 统计。
+        """
+        text = str(message or "")
+        with self._lock:
+            self._log_seq += 1
+            self._logs.append(
+                {
+                    "id": self._log_seq,
+                    "time": time.strftime("%H:%M:%S"),
+                    "message": text,
+                }
+            )
+
     def status(self) -> Dict[str, Any]:
         with self._lock:
             return {

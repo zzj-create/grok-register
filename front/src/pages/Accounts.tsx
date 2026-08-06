@@ -764,7 +764,7 @@ export function AccountsPage() {
       const result = await api.startBatchReregister(failedIds);
       setReregister(result.reregister);
       setReregisterPolling(!!result.reregister.running);
-      showToast("已启动批量重新注册", "success");
+      showToast("已启动批量重新注册，详细日志见注册页日志面板", "success");
     } catch (err: any) {
       showToast(err.message || "启动批量重新注册失败", "error");
     } finally {
@@ -865,7 +865,7 @@ export function AccountsPage() {
       const result = await api.startReregister(item.id);
       setReregister(result.reregister);
       setReregisterPolling(!!result.reregister.running);
-      showToast("已启动重新注册，请稍候", "success");
+      showToast("已启动重新注册，详细日志见注册页日志面板", "success");
     } catch (err: any) {
       showToast(err.message || "启动重新注册失败", "error");
     }

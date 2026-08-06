@@ -134,8 +134,29 @@ class ReregisterJobCoordinator:
 
         def runner() -> None:
             errors = list(validation_errors)
+            from backend.registration import engine as gr
+            from backend.web.jobs import job_coordinator
+
+            original_registration_log = gr.registration_log
+
+            def panel_log(message: Any) -> None:
+                try:
+                    original_registration_log(message)
+                except Exception:
+                    pass
+                try:
+                    job_coordinator.append_external_log(str(message or ""))
+                except Exception:
+                    pass
+
+            gr.registration_log = panel_log
+            for message in validation_errors:
+                job_coordinator.append_external_log(f"[!] 跳过: {message}")
+            job_coordinator.append_external_log(
+                f"[*] 重新注册任务启动：共 {len(runnable)} 个失败账号"
+            )
             try:
-                for record in runnable:
+                for index, record in enumerate(runnable, start=1):
                     if self._stop_requested:
                         errors.append("用户停止重新注册")
                         with self._lock:
@@ -149,11 +170,22 @@ class ReregisterJobCoordinator:
                             email=str(record.get("email") or "").strip(),
                             stage="打开注册页",
                         )
+                        record_label = str(record.get("email") or "").strip() or f"账号 {record.get('id')}"
+                        job_coordinator.append_external_log(
+                            f"--- 开始重新注册 {index}/{len(runnable)}: {record_label} ---"
+                        )
                         error = self._run_record(record, store)
                     except Exception as exc:
                         error = str(exc) or exc.__class__.__name__
                     if error:
                         errors.append(f"{record.get('email') or record.get('id')}: {error}")
+                        job_coordinator.append_external_log(
+                            f"[-] 重新注册失败: {record.get('email') or record.get('id')}: {error}"
+                        )
+                    else:
+                        job_coordinator.append_external_log(
+                            f"[+] 重新注册成功: {record.get('email') or record.get('id')}"
+                        )
                     with self._lock:
                         self._completed_count += 1
                         if error:
@@ -161,6 +193,7 @@ class ReregisterJobCoordinator:
                         else:
                             self._success_count += 1
             finally:
+                gr.registration_log = original_registration_log
                 with self._lock:
                     if self._total_count == 1:
                         self._stage = "重新注册失败" if errors else "重新注册完成"
@@ -173,6 +206,12 @@ class ReregisterJobCoordinator:
                     self._running = False
                     self._stop_requested = False
                     self._finished_at = time.time()
+                try:
+                    job_coordinator.append_external_log(
+                        f"[*] 重新注册任务结束：成功 {self._success_count} | 失败 {self._failed_count}"
+                    )
+                except Exception:
+                    pass
 
         self._thread = threading.Thread(
             target=runner,
@@ -289,6 +328,12 @@ class ReregisterJobCoordinator:
 
         def log(message: str) -> None:
             text = str(message or "")
+            try:
+                from backend.web.jobs import job_coordinator
+
+                job_coordinator.append_external_log(text)
+            except Exception:
+                pass
             if "打开注册页" in text:
                 self._set(stage="打开注册页")
             elif "创建邮箱并提交" in text or "已创建邮箱" in text:
