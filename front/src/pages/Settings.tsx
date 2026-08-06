@@ -28,6 +28,7 @@ import {
   PageHeader,
   Select,
   Switch,
+  Textarea,
   Toast,
 } from "@/components/ui";
 
@@ -357,6 +358,27 @@ export function SettingsPage() {
               placeholder="socks5://username:password@host:port"
               helper="支持 http://host:port、https://host:port、socks5://username:password@host:port，以及 host:port@username:password。用户名或密码含特殊字符时请先进行 URL 编码。"
             />
+            <div className="min-w-0 space-y-2 sm:col-span-2">
+              <Label htmlFor="proxy_pool">代理池（每行一个）</Label>
+              <Textarea
+                id="proxy_pool"
+                rows={4}
+                value={config.proxy_pool || ""}
+                onChange={(event) => setField("proxy_pool", event.target.value)}
+                placeholder={"socks5://user1:pass1@host1:port\nhttp://host2:port@user2:pass2\n# 注释行会被忽略"}
+              />
+              <p className="text-xs leading-5 text-muted-foreground">
+                支持换行或逗号分隔，# 开头为注释；格式与上方网络代理相同。开启下方开关后代理池生效，注册将使用池内当前代理而不是单个网络代理。
+              </p>
+            </div>
+            <div className="sm:col-span-2">
+              <ToggleRow
+                title="注册失败自动切换代理"
+                description="注册失败、流程卡住、CPA 转换失败或启动连通性检查被拦截时，自动轮换到代理池下一个代理（需先在上方填写代理池）"
+                checked={!!config.proxy_switch_on_failure}
+                onCheckedChange={(value) => setField("proxy_switch_on_failure", value)}
+              />
+            </div>
             <ConfigField {...fieldState}
               label="账号间隔（秒）"
               field="account_interval"

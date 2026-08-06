@@ -186,6 +186,9 @@ DEFAULT_CONFIG = {
     "outlookemail_pick_mode": "random",
     "outlookemail_disable_after_cpa_success": False,
     "proxy": "http://127.0.0.1:7890",
+    # 代理池：换行或逗号分隔多个代理；开启后注册失败自动轮换到下一个
+    "proxy_pool": "",
+    "proxy_switch_on_failure": False,
     "enable_nsfw": True,
     "debug_mode": False,
     "browser_headless": False,
@@ -598,10 +601,59 @@ DUCKMAIL_API_BASE_DEFAULT = duckmail_provider.API_BASE_DEFAULT
 
 
 def get_proxies():
-    proxy = resolve_proxy_url(config.get("proxy", ""))
+    proxy = resolve_proxy_url(get_current_proxy())
     if proxy:
         return {"http": proxy, "https": proxy}
     return {}
+
+
+_proxy_pool_lock = threading.Lock()
+_proxy_pool_index = 0
+
+
+def get_proxy_pool():
+    """解析 proxy_pool 配置为代理列表（换行/逗号分隔，# 开头为注释）。"""
+    raw = str(config.get("proxy_pool", "") or "")
+    items = []
+    for line in raw.replace(",", "\n").splitlines():
+        item = line.strip()
+        if not item or item.startswith("#"):
+            continue
+        items.append(item)
+    return items
+
+
+def proxy_pool_switch_enabled():
+    """失败自动切换是否生效：开关打开且代理池非空。"""
+    return bool(config.get("proxy_switch_on_failure", False)) and bool(get_proxy_pool())
+
+
+def get_current_proxy():
+    """当前生效代理：失败切换开启且池非空时用池内当前项，否则回退 config.proxy。"""
+    if proxy_pool_switch_enabled():
+        pool = get_proxy_pool()
+        with _proxy_pool_lock:
+            index = _proxy_pool_index % len(pool)
+        return pool[index]
+    return str(config.get("proxy", "") or "")
+
+
+def switch_to_next_proxy(reason="", log_callback=None):
+    """注册失败后轮换到代理池下一个代理；返回新代理（未切换返回空串）。"""
+    global _proxy_pool_index
+    if not proxy_pool_switch_enabled():
+        return ""
+    pool = get_proxy_pool()
+    with _proxy_pool_lock:
+        _proxy_pool_index = (_proxy_pool_index + 1) % len(pool)
+        index = _proxy_pool_index
+        current = pool[index]
+    if log_callback:
+        log_callback(
+            f"[*] 代理池轮换({reason or '注册失败'})：切换到第 {index + 1}/{len(pool)} 个 "
+            f"{redact_proxy_url(normalize_proxy_url(current))}"
+        )
+    return current
 
 
 def reset_network_route_logs():
@@ -882,7 +934,7 @@ def _normalize_sso_token(raw_token):
 
 def _resolve_cpa_proxy():
     """CPA 换 token 用的代理：优先 config.proxy，其次环境变量，否则直连。"""
-    proxy = resolve_proxy_url(config.get("proxy", ""))
+    proxy = resolve_proxy_url(get_current_proxy())
     if proxy:
         return proxy
     for key in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"):
@@ -2260,10 +2312,20 @@ def run_registration(count):
     except Exception:
         pass
     try:
-        startup_checks = _conn.run_connectivity_checks(config, http_get, http_post)
-        for name, ok, detail in startup_checks:
-            registration_log(f"[检查] [{'OK' if ok else 'FAIL'}] {name}: {detail}")
-        if _conn.has_blocking_xai_failure(startup_checks):
+        pool_attempts = len(get_proxy_pool()) if proxy_pool_switch_enabled() else 1
+        startup_blocked = False
+        for check_attempt in range(pool_attempts):
+            checks_config = dict(config)
+            checks_config["proxy"] = get_current_proxy()
+            startup_checks = _conn.run_connectivity_checks(checks_config, http_get, http_post)
+            for name, ok, detail in startup_checks:
+                registration_log(f"[检查] [{'OK' if ok else 'FAIL'}] {name}: {detail}")
+            startup_blocked = _conn.has_blocking_xai_failure(startup_checks)
+            if not startup_blocked:
+                break
+            if check_attempt + 1 < pool_attempts:
+                switch_to_next_proxy(reason="连通性检查失败", log_callback=registration_log)
+        if startup_blocked:
             registration_log("[!] xAI 注册页被 Cloudflare 拦截，已停止建号；请更换当前 proxy 后重试")
             return
     except Exception as exc:
@@ -2275,6 +2337,11 @@ def run_registration(count):
         fail_count += 1
         fail_stats[kind] = fail_stats.get(kind, 0) + 1
         return kind
+
+    def _switch_proxy_on_failure(kind):
+        """注册失败后按代理池轮换到下一个代理（未开启时静默返回）。"""
+        reason = FAIL_LABELS.get(kind, kind) if kind else "注册失败"
+        return switch_to_next_proxy(reason=reason, log_callback=registration_log)
 
     def _persist_result(*, started_at, worker_id=0, **kwargs):
         trace_text = ""
@@ -2338,6 +2405,7 @@ def run_registration(count):
                     local_fail = n
                     local_fail_stats[FAIL_BROWSER] = local_fail_stats.get(FAIL_BROWSER, 0) + n
                     registration_log(f"[W{wid+1}] [-] 浏览器启动失败，{n} 个任务均记为失败: {boot_exc}")
+                    _switch_proxy_on_failure(FAIL_BROWSER)
                     for _ in range(max(int(n or 0), 0)):
                         _persist_result(
                             started_at=boot_started_at,
@@ -2448,6 +2516,7 @@ def run_registration(count):
                             registration_log(
                                 f"[W{wid+1}] [-] 注册未计成功 [CPA失败]: {reason}"
                             )
+                            _switch_proxy_on_failure(FAIL_CPA)
                         else:
                             email_disable_detail = (
                                 disable_outlookemail_after_cpa_success(
@@ -2536,6 +2605,9 @@ def run_registration(count):
                                 extra={"重试次数": retry_used},
                             )
                             registration_log(f"[W{wid+1}] [-] 卡住跳过: {exc}")
+                            _switch_proxy_on_failure(kind)
+                        else:
+                            _switch_proxy_on_failure("卡住重试")
                     except Exception as exc:
                         kind = classify_failure(exc)
                         local_fail_stats[kind] = local_fail_stats.get(kind, 0) + 1
@@ -2558,6 +2630,7 @@ def run_registration(count):
                             nsfw_status=nsfw_status,
                         )
                         registration_log(f"[W{wid+1}] [-] 失败 [{FAIL_LABELS.get(kind, kind)}]: {exc}")
+                        _switch_proxy_on_failure(kind)
                     finally:
                         if i < n and not controller.should_stop():
                             try:
@@ -2604,6 +2677,7 @@ def run_registration(count):
             fail_count += count
             fail_stats[FAIL_BROWSER] = fail_stats.get(FAIL_BROWSER, 0) + count
             registration_log(f"[-] 浏览器启动失败，{count} 个任务均记为失败: {boot_exc}")
+            _switch_proxy_on_failure(FAIL_BROWSER)
             for _ in range(max(int(count or 0), 0)):
                 _persist_result(
                     started_at=boot_started_at,
@@ -2750,6 +2824,7 @@ def run_registration(count):
                         extra={"任务序号": i, "并发数": 1},
                     )
                     registration_log(f"[-] 注册未计成功 [CPA失败]: {reason}")
+                    _switch_proxy_on_failure(FAIL_CPA)
                 else:
                     email_disable_detail = (
                         disable_outlookemail_after_cpa_success(
@@ -2846,6 +2921,7 @@ def run_registration(count):
                         extra={"重试次数": retry_used},
                     )
                     registration_log(f"[-] 当前账号已达到最大重试次数，跳过 [{FAIL_LABELS.get(kind, kind)}]: {exc}")
+                    _switch_proxy_on_failure(kind)
             except Exception as exc:
                 kind = _record_failure(exc)
                 retry_count_for_slot = 0
@@ -2865,6 +2941,7 @@ def run_registration(count):
                     nsfw_status=nsfw_status,
                 )
                 registration_log(f"[-] 注册失败 [{FAIL_LABELS.get(kind, kind)}]: {exc}")
+                _switch_proxy_on_failure(kind)
             finally:
                 if controller.should_stop():
                     break

@@ -68,6 +68,8 @@ CONFIG_PUBLIC_KEYS = (
     "outlookemail_pick_mode",
     "outlookemail_disable_after_cpa_success",
     "proxy",
+    "proxy_pool",
+    "proxy_switch_on_failure",
     "enable_nsfw",
     "debug_mode",
     "browser_headless",
@@ -325,6 +327,7 @@ def _apply_config_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
             "close_browser_on_stop",
             "cpa_auto_add",
             "grok2api_auto_import",
+            "proxy_switch_on_failure",
             "sub2api_auto_import",
             "sub2api_auto_create_group",
             "outlookemail_disable_after_cpa_success",
@@ -390,6 +393,7 @@ def _apply_config_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
             value = mode
         elif key in (
             "proxy",
+            "proxy_pool",
             "cpa_remote_url",
             "grok2api_remote_url",
             "sub2api_remote_url",
@@ -403,6 +407,18 @@ def _apply_config_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
                     parse_proxy_url(value)
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if key == "proxy_pool" and value:
+                # 逐行校验代理池条目，复用与 proxy 相同的格式解析
+                for line in value.replace(",", "\n").splitlines():
+                    entry = line.strip()
+                    if not entry or entry.startswith("#"):
+                        continue
+                    try:
+                        parse_proxy_url(entry)
+                    except ValueError as exc:
+                        raise HTTPException(
+                            status_code=400, detail=f"代理池条目无效 ({entry}): {exc}"
+                        ) from exc
         else:
             if isinstance(value, (dict, list)):
                 continue

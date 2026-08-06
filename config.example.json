@@ -24,6 +24,8 @@
   "outlookemail_top": 10,
   "outlookemail_disable_after_cpa_success": false,
   "proxy": "",
+  "proxy_pool": "",
+  "proxy_switch_on_failure": false,
   "enable_nsfw": true,
   "debug_mode": false,
   "browser_headless": false,
