@@ -186,9 +186,11 @@ DEFAULT_CONFIG = {
     "outlookemail_pick_mode": "random",
     "outlookemail_disable_after_cpa_success": False,
     "proxy": "http://127.0.0.1:7890",
-    # 代理池：换行或逗号分隔多个代理；开启后注册失败自动轮换到下一个
+    # 代理池：换行或逗号分隔多个代理；开启下方开关后自动轮换到下一个
     "proxy_pool": "",
     "proxy_switch_on_failure": False,
+    # 每完成一个账号（无论成功或失败）自动轮换到代理池下一个代理
+    "proxy_switch_every_attempt": False,
     "enable_nsfw": True,
     "debug_mode": False,
     "browser_headless": False,
@@ -628,9 +630,23 @@ def proxy_pool_switch_enabled():
     return bool(config.get("proxy_switch_on_failure", False)) and bool(get_proxy_pool())
 
 
+def proxy_pool_active():
+    """代理池是否参与注册：失败切换或每号切换任一开关打开且代理池非空。"""
+    if not get_proxy_pool():
+        return False
+    return bool(config.get("proxy_switch_on_failure", False)) or bool(
+        config.get("proxy_switch_every_attempt", False)
+    )
+
+
+def proxy_rotate_every_attempt_enabled():
+    """每完成一个账号（无论成功或失败）自动轮换代理池是否生效。"""
+    return bool(config.get("proxy_switch_every_attempt", False)) and bool(get_proxy_pool())
+
+
 def get_current_proxy():
-    """当前生效代理：失败切换开启且池非空时用池内当前项，否则回退 config.proxy。"""
-    if proxy_pool_switch_enabled():
+    """当前生效代理：代理池启用时用池内当前项，否则回退 config.proxy。"""
+    if proxy_pool_active():
         pool = get_proxy_pool()
         with _proxy_pool_lock:
             index = _proxy_pool_index % len(pool)
@@ -639,9 +655,9 @@ def get_current_proxy():
 
 
 def switch_to_next_proxy(reason="", log_callback=None):
-    """注册失败后轮换到代理池下一个代理；返回新代理（未切换返回空串）。"""
+    """轮换到代理池下一个代理；返回新代理（未切换返回空串）。"""
     global _proxy_pool_index
-    if not proxy_pool_switch_enabled():
+    if not proxy_pool_active():
         return ""
     pool = get_proxy_pool()
     with _proxy_pool_lock:
@@ -650,7 +666,7 @@ def switch_to_next_proxy(reason="", log_callback=None):
         current = pool[index]
     if log_callback:
         log_callback(
-            f"[*] 代理池轮换({reason or '注册失败'})：切换到第 {index + 1}/{len(pool)} 个 "
+            f"[*] 代理池轮换({reason or '轮换'})：切换到第 {index + 1}/{len(pool)} 个 "
             f"{redact_proxy_url(normalize_proxy_url(current))}"
         )
     return current
@@ -2312,7 +2328,7 @@ def run_registration(count):
     except Exception:
         pass
     try:
-        pool_attempts = len(get_proxy_pool()) if proxy_pool_switch_enabled() else 1
+        pool_attempts = len(get_proxy_pool()) if proxy_pool_active() else 1
         startup_blocked = False
         for check_attempt in range(pool_attempts):
             checks_config = dict(config)
@@ -2338,8 +2354,14 @@ def run_registration(count):
         fail_stats[kind] = fail_stats.get(kind, 0) + 1
         return kind
 
-    def _switch_proxy_on_failure(kind):
-        """注册失败后按代理池轮换到下一个代理（未开启时静默返回）。"""
+    def _switch_proxy_on_failure(kind, force=False):
+        """注册失败后按代理池轮换到下一个代理（未开启时静默返回）。
+
+        开启“每号切换”时由每次尝试的收尾逻辑统一切换，避免同一账号重复消耗多个代理；
+        force=True 用于循环外的一次性失败（如浏览器启动失败）仍立即轮换。
+        """
+        if not force and proxy_rotate_every_attempt_enabled():
+            return ""
         reason = FAIL_LABELS.get(kind, kind) if kind else "注册失败"
         return switch_to_next_proxy(reason=reason, log_callback=registration_log)
 
@@ -2405,7 +2427,7 @@ def run_registration(count):
                     local_fail = n
                     local_fail_stats[FAIL_BROWSER] = local_fail_stats.get(FAIL_BROWSER, 0) + n
                     registration_log(f"[W{wid+1}] [-] 浏览器启动失败，{n} 个任务均记为失败: {boot_exc}")
-                    _switch_proxy_on_failure(FAIL_BROWSER)
+                    _switch_proxy_on_failure(FAIL_BROWSER, force=True)
                     for _ in range(max(int(n or 0), 0)):
                         _persist_result(
                             started_at=boot_started_at,
@@ -2422,6 +2444,7 @@ def run_registration(count):
                 i = 0
                 retry = 0
                 while i < n and not controller.should_stop():
+                    i_before = i
                     attempt_started_at = time.time()
                     email = ""
                     profile = {}
@@ -2632,6 +2655,11 @@ def run_registration(count):
                         registration_log(f"[W{wid+1}] [-] 失败 [{FAIL_LABELS.get(kind, kind)}]: {exc}")
                         _switch_proxy_on_failure(kind)
                     finally:
+                        if proxy_rotate_every_attempt_enabled() and i != i_before:
+                            switch_to_next_proxy(
+                                reason="完成一个账号",
+                                log_callback=lambda m: registration_log(f"[W{wid+1}] {m}"),
+                            )
                         if i < n and not controller.should_stop():
                             try:
                                 stop_browser()
@@ -2677,7 +2705,7 @@ def run_registration(count):
             fail_count += count
             fail_stats[FAIL_BROWSER] = fail_stats.get(FAIL_BROWSER, 0) + count
             registration_log(f"[-] 浏览器启动失败，{count} 个任务均记为失败: {boot_exc}")
-            _switch_proxy_on_failure(FAIL_BROWSER)
+            _switch_proxy_on_failure(FAIL_BROWSER, force=True)
             for _ in range(max(int(count or 0), 0)):
                 _persist_result(
                     started_at=boot_started_at,
@@ -2696,6 +2724,7 @@ def run_registration(count):
             if controller.should_stop():
                 break
             registration_log(f"--- 开始第 {i + 1}/{count} 个账号 ---")
+            i_before = i
             attempt_started_at = time.time()
             email = ""
             profile = {}
@@ -2945,6 +2974,9 @@ def run_registration(count):
             finally:
                 if controller.should_stop():
                     break
+                # 每完成一个账号（无论成功或失败）且开启“每号切换”时轮换代理池
+                if proxy_rotate_every_attempt_enabled() and i != i_before:
+                    switch_to_next_proxy(reason="完成一个账号", log_callback=registration_log)
                 # 每轮结束只关浏览器，不立刻再开。
                 # 下一轮 open_signup_page 会按需启动并导航到官网，避免空浏览器残留。
                 if i >= count:

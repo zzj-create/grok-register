@@ -26,6 +26,7 @@
   "proxy": "",
   "proxy_pool": "",
   "proxy_switch_on_failure": false,
+  "proxy_switch_every_attempt": false,
   "enable_nsfw": true,
   "debug_mode": false,
   "browser_headless": false,

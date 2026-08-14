@@ -10,6 +10,7 @@ class ProxyPoolTests(unittest.TestCase):
         engine.config["proxy"] = "http://127.0.0.1:7890"
         engine.config["proxy_pool"] = ""
         engine.config["proxy_switch_on_failure"] = False
+        engine.config["proxy_switch_every_attempt"] = False
         engine._proxy_pool_index = 0
 
     def tearDown(self):
@@ -45,6 +46,33 @@ class ProxyPoolTests(unittest.TestCase):
         self.assertFalse(engine.proxy_pool_switch_enabled())
         engine.config["proxy_pool"] = "http://h1:1001"
         self.assertTrue(engine.proxy_pool_switch_enabled())
+
+    def test_every_attempt_flag_activates_pool_without_failure_flag(self):
+        engine.config["proxy_pool"] = "http://h1:1001\nhttp://h2:1002"
+        engine.config["proxy_switch_every_attempt"] = True
+        self.assertTrue(engine.proxy_pool_active())
+        self.assertFalse(engine.proxy_pool_switch_enabled())
+        self.assertTrue(engine.proxy_rotate_every_attempt_enabled())
+        self.assertEqual(engine.get_current_proxy(), "http://h1:1001")
+        logs = []
+        self.assertEqual(
+            engine.switch_to_next_proxy("完成一个账号", logs.append), "http://h2:1002"
+        )
+        self.assertEqual(engine.get_current_proxy(), "http://h2:1002")
+        self.assertEqual(len(logs), 1)
+        self.assertIn("完成一个账号", logs[0])
+
+    def test_every_attempt_requires_pool(self):
+        engine.config["proxy_switch_every_attempt"] = True
+        self.assertFalse(engine.proxy_pool_active())
+        self.assertFalse(engine.proxy_rotate_every_attempt_enabled())
+        self.assertEqual(engine.get_current_proxy(), "http://127.0.0.1:7890")
+        self.assertEqual(engine.switch_to_next_proxy(), "")
+
+    def test_pool_stays_inactive_without_any_flag(self):
+        engine.config["proxy_pool"] = "http://h1:1001"
+        self.assertFalse(engine.proxy_pool_active())
+        self.assertEqual(engine.get_current_proxy(), "http://127.0.0.1:7890")
 
     def test_current_proxy_falls_back_to_single_proxy(self):
         self.assertEqual(engine.get_current_proxy(), "http://127.0.0.1:7890")

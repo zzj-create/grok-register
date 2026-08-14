@@ -193,6 +193,14 @@ class ReregisterJobCoordinator:
                         job_coordinator.append_external_log(
                             f"[+] 重新注册成功: {record.get('email') or record.get('id')}"
                         )
+                        try:
+                            if gr.proxy_rotate_every_attempt_enabled():
+                                gr.switch_to_next_proxy(
+                                    reason="重新注册完成",
+                                    log_callback=job_coordinator.append_external_log,
+                                )
+                        except Exception:
+                            pass
                     with self._lock:
                         self._completed_count += 1
                         if error:

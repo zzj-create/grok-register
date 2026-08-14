@@ -379,6 +379,14 @@ export function SettingsPage() {
                 onCheckedChange={(value) => setField("proxy_switch_on_failure", value)}
               />
             </div>
+            <div className="sm:col-span-2">
+              <ToggleRow
+                title="每注册一个账号自动切换代理"
+                description="每个账号注册完成（无论成功或失败）后，自动轮换到代理池下一个代理；开启后每次尝试结束时统一切换，失败切换开关仍负责重试、卡住等中间失败场景"
+                checked={!!config.proxy_switch_every_attempt}
+                onCheckedChange={(value) => setField("proxy_switch_every_attempt", value)}
+              />
+            </div>
             <ConfigField {...fieldState}
               label="账号间隔（秒）"
               field="account_interval"

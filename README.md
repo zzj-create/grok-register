@@ -166,6 +166,7 @@ Windows 启动：
 | `proxy` | 注册和 OAuth 请求使用的代理；支持 `http://host:port`、`https://host:port`、带认证的 `socks5://username:password@host:port`，以及供应商常见的 `host:port@username:password` HTTP 写法 |
 | `proxy_pool` | 代理池（换行或逗号分隔多个代理，`#` 注释），格式同 `proxy` |
 | `proxy_switch_on_failure` | 注册失败/流程卡住/CPA 转换失败/启动检查被拦截时自动轮换代理池下一个代理 |
+| `proxy_switch_every_attempt` | 每完成一个账号（无论成功或失败）自动轮换代理池下一个代理 |
 | `browser_headless` | 本机无头模式；Docker 中强制关闭 |
 | `cpa_auto_add` | 注册后生成 CPA 授权 |
 | `cpa_auth_dir` | CPA JSON 保存目录 |
