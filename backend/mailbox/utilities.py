@@ -62,11 +62,16 @@ def strip_html(html: str) -> str:
     return _TAG_RE.sub(" ", cleaned)
 
 
-def _match_code(pattern: re.Pattern, source: str) -> Optional[str]:
-    """取第一个含字母的匹配，纯数字串（如 100-200）不是验证码。"""
+def _match_code(pattern: re.Pattern, source: str, *, require_alpha: bool = True) -> Optional[str]:
+    """取第一个匹配。
+
+    require_alpha=True 时只接受含字母的 token，避免 CSS 类名、编号（如
+    100-200）被误判；带 code/验证码 上下文锚定的匹配可以放心接受纯数字
+    （xAI 会发 393-696 这类纯数字验证码）。
+    """
     for match in pattern.finditer(source):
         token = match.group(1)
-        if any(ch.isalpha() for ch in token):
+        if not require_alpha or any(ch.isalpha() for ch in token):
             return token
     return None
 
@@ -75,11 +80,15 @@ def extract_verification_code(text: str, subject: str = "") -> Optional[str]:
     subject = subject or ""
     text = text or ""
     # 主题最干净，优先；正文里带 code 关键字的上下文次之，裸 token 最后。
-    for pattern in (_CODE_WITH_CONTEXT_RE, _CODE_BARE_RE):
-        for source in (subject, text):
-            code = _match_code(pattern, source)
-            if code:
-                return code
+    # 上下文已锚定 code/验证码，允许纯数字 token；裸 token 仍然必须含字母。
+    for source in (subject, text):
+        code = _match_code(_CODE_WITH_CONTEXT_RE, source, require_alpha=False)
+        if code:
+            return code
+    for source in (subject, text):
+        code = _match_code(_CODE_BARE_RE, source, require_alpha=True)
+        if code:
+            return code
     for pattern in _NUMERIC_CODE_RES:
         match = pattern.search(text) or pattern.search(subject)
         if match:

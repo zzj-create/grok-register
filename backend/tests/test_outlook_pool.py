@@ -324,6 +324,91 @@ class OutlookEmailCodeTimeTests(unittest.TestCase):
         self.assertEqual(code, "NEW-222")
         self.assertEqual(requested[0][1]["params"]["email"], "fixture@outlook.com")
 
+    def test_wait_for_code_extracts_pure_numeric_code(self):
+        submitted_at = 1_700_000_000.5
+
+        def http_get(url, **kwargs):
+            return FakeResponse(
+                {
+                    "success": True,
+                    "emails": [
+                        {
+                            "id": "numeric-code",
+                            "subject": "SpaceXAI confirmation code: 393-696",
+                            "date": submitted_at + 1,
+                            "body_preview": (
+                                "Thank you for creating a SpaceXAI account. "
+                                "Please use the code below to validate your email "
+                                "address.\r\n\r\n393-696"
+                            ),
+                        }
+                    ],
+                }
+            )
+
+        code = outlook_pool.wait_for_code(
+            http_get,
+            lambda: None,
+            "http://mail-pool.test",
+            "fixture@outlook.com",
+            api_key="api-key",
+            source="accounts",
+            folder="inbox",
+            timeout=1,
+            poll_interval=0,
+            min_received_at=submitted_at,
+            raise_if_cancelled=lambda _callback: None,
+            sleep_with_cancel=lambda _seconds, _callback: None,
+        )
+
+        self.assertEqual(code, "393-696")
+
+    def test_wait_for_code_splits_all_folder_into_inbox_and_junkemail(self):
+        requested = []
+
+        def http_get(url, **kwargs):
+            requested.append(kwargs.get("params", {}).get("folder"))
+            return FakeResponse({"success": True, "emails": []})
+
+        with self.assertRaisesRegex(Exception, "未收到验证码"):
+            outlook_pool.wait_for_code(
+                http_get,
+                lambda: None,
+                "http://mail-pool.test",
+                "fixture@outlook.com",
+                api_key="api-key",
+                source="accounts",
+                folder="all",
+                timeout=0.2,
+                poll_interval=0,
+                raise_if_cancelled=lambda _callback: None,
+                sleep_with_cancel=lambda _seconds, _callback: None,
+            )
+
+        self.assertEqual(requested[:2], ["inbox", "junkemail"])
+
+    def test_wait_for_code_fails_fast_when_account_missing(self):
+        def http_get(url, **kwargs):
+            return FakeResponse(
+                {"success": False, "error": "邮箱账号不存在"},
+                status_code=404,
+            )
+
+        with self.assertRaisesRegex(Exception, "邮箱已不可用"):
+            outlook_pool.wait_for_code(
+                http_get,
+                lambda: None,
+                "http://mail-pool.test",
+                "gone@outlook.com",
+                api_key="api-key",
+                source="accounts",
+                folder="inbox",
+                timeout=5,
+                poll_interval=0,
+                raise_if_cancelled=lambda _callback: None,
+                sleep_with_cancel=lambda _seconds, _callback: None,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

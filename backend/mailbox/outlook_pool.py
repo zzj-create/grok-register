@@ -778,17 +778,37 @@ def wait_for_code(
                     proxies=proxies,
                 )
             else:
-                messages = get_messages(
-                    http_get,
-                    api_base,
-                    api_key,
-                    email,
-                    folder=folder,
-                    top=top,
+                # 新版 OutlookEmail 外部接口只接受 inbox/junkemail；
+                # 配置为 all 时在客户端拆成两个文件夹分别拉取后合并，行为等价。
+                folder_value = str(folder or "all").strip() or "all"
+                folders = (
+                    ("inbox", "junkemail")
+                    if folder_value.lower() == "all"
+                    else (folder_value,)
                 )
+                messages = []
+                for folder_item in folders:
+                    messages.extend(
+                        get_messages(
+                            http_get,
+                            api_base,
+                            api_key,
+                            email,
+                            folder=folder_item,
+                            top=top,
+                        )
+                    )
         except Exception as exc:
+            error_text = str(exc)
             if log_callback:
-                log_callback(f"[Debug] OutlookEmail 拉取邮件失败: {exc}")
+                log_callback(f"[Debug] OutlookEmail 拉取邮件失败: {error_text}")
+            # 404(邮箱已从池中移除)/400(参数不被服务端接受)属于永久性错误，
+            # 继续轮询只会空转到超时；直接抛出并交由上层更换邮箱。
+            if "404" in error_text or "400" in error_text or "邮箱账号不存在" in error_text:
+                raise Exception(
+                    "OutlookEmail 邮箱已不可用，无法拉取验证码邮件"
+                    f"(可能已从账号池移除): {error_text}"
+                ) from exc
             sleep_with_cancel(poll_interval, cancel_callback)
             continue
         if log_callback:
@@ -825,5 +845,7 @@ def wait_for_code(
                 if log_callback:
                     log_callback(f"[*] OutlookEmail 从邮件中提取到验证码: {code}")
                 return code
+            if log_callback:
+                log_callback(f"[!] OutlookEmail 收到邮件但未识别出验证码: {subject}")
         sleep_with_cancel(poll_interval, cancel_callback)
     raise Exception(f"OutlookEmail 在 {timeout}s 内未收到验证码邮件")
